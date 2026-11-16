@@ -1,0 +1,52 @@
+# covattn
+
+Mechanistic diagnosis and training-free repair of covariate-effect attenuation in Chronos-2.
+
+## Layout
+
+```
+src/covattn/   systems.py (synthetic forced systems + exact counterfactuals), model.py (Chronos-2 wrapper),
+               metrics.py, baselines.py (ARX), io_utils.py (results dirs, resume, logging)
+scripts/       verify_model.py (stage-0 source checks -> docs/model_facts.json), exp1_phenomenon.py
+docs/          model_notes.md (verified model internals), model_facts.json
+colab/         run_all.ipynb (regenerate with `python tools/make_notebook.py`)
+tests/         pytest; `-m model` tests need the HF weights
+```
+
+## Local (Windows, tested: Win 11, RTX 4060 Laptop 8 GB, Python 3.11)
+
+```powershell
+py -m pip install --user uv
+py -m uv venv --python 3.11 .venv
+py -m uv pip install --python .venv\Scripts\python.exe torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+py -m uv pip install --python .venv\Scripts\python.exe -r requirements.txt -e .
+.venv\Scripts\python.exe -m pytest -q                 # all tests (downloads amazon/chronos-2 once)
+.venv\Scripts\python.exe scripts\verify_model.py
+.venv\Scripts\python.exe scripts\exp1_phenomenon.py --quick
+.venv\Scripts\python.exe scripts\exp1_phenomenon.py --resume
+```
+
+WSL2 also works and is preferable for long runs. On native Windows, check that the driver supports the
+CUDA version of the torch wheel (`nvidia-smi` "CUDA Version" >= 12.8 for cu128). DataLoader workers default
+to 0 on Windows (`io_utils.default_num_workers`). Close GPU-heavy applications (games, GPU wallpapers)
+during runs: the encoder's group attention spans the whole batch, and contention made the laptop GPU drop
+off the bus once (driver reset requires a reboot); everything is resumable.
+
+## Colab (A100)
+
+Open `colab/run_all.ipynb`: mount Drive → get the code → `pip install -r requirements.txt && pip install -e .`
+→ check GPU → `RESULTS_DIR=/content/drive/MyDrive/pakdd27/results` → one cell per experiment, all with
+`--resume`.
+
+## Conventions
+
+* Results: `$RESULTS_DIR/<exp>/<run>/` with `config.json` (config + git commit + env), `metrics.jsonl`
+  (one line per finished sub-task; `--resume` skips those), `cells/*.npz` (raw per-sample arrays),
+  `done.marker`, `log.txt`. Reports: `$RESULTS_DIR/reports/`. `RESULTS_DIR` defaults to `./results`.
+* `--resume` refuses a changed config except for keys that only choose which sub-tasks run or how fast
+  (`contexts`, `batch_size`, `device`), so a run can be split between machines: copy
+  `results/exp1/main` to Drive and continue with `--resume --contexts 2048` on Colab.
+* `--amp {off,bf16,fp16}`; default `off` (fp32). `--batch-size` counts series (rows), halves on OOM;
+  default 128 (group attention cost grows with rows²).
+* Every script prints a time estimate for RTX 4060 and A100 (measured on the current device; the other is
+  scaled by a fixed rough factor and labelled as such).
