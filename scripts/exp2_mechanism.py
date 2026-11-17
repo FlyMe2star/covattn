@@ -217,6 +217,14 @@ def write_summary(run: RunDir, cfg: Exp2Config) -> None:
         groups[f"L={L}"] = [c for c in cells if c["L"] == L]
     for inp in sorted({c["input"] for c in cells}):
         groups[f"input={inp}"] = [c for c in cells if c["input"] == inp]
+    # input x L: the two input regimes behave very differently, so pooled medians mix them
+    sub = {}
+    for inp in sorted({c["input"] for c in cells}):
+        for L in sorted({c["L"] for c in cells}):
+            cs = [c for c in cells if c["input"] == inp and c["L"] == L]
+            if cs:
+                sub[f"{inp},L={L}"] = cs
+    groups.update(sub)
 
     # ---- baseline gains
     lines += ["## Model effect gain g (median [IQR]) per cell group", "", "| group | n | g |", "|---|---|---|"]
@@ -300,7 +308,28 @@ def write_summary(run: RunDir, cfg: Exp2Config) -> None:
             lines += [f"### Per-head `{comp}` restoration at future positions, L={L}: `{f.with_suffix('.pdf')}`", "",
                       "| layer | head | ratio |", "|---|---|---|"]
             lines += [f"| {int(o) // 12} | {int(o) % 12} | {mat.ravel()[o]:.3f} |" for o in order]
-            lines += ["", f"Sum over all heads: {np.nansum(mat):.3f}", ""]
+            srt = np.sort(np.nan_to_num(mat.ravel(), nan=0.0))[::-1]
+            lines += ["", f"Sum over all heads: {np.nansum(mat):.3f}; top-10 sum {srt[:10].sum():.3f}; "
+                      f"top-20 sum {srt[:20].sum():.3f}", ""]
+
+    # ---- restoration split by input x L
+    lines += ["## Restoration by input x L (top-6 layer-level; per-head totals where available)", ""]
+    for gname, cs in sub.items():
+        n_cfg = min(len(c["patch_names"]) for c in cs)
+        names = cs[0]["patch_names"][:n_cfg]
+        R = _pooled_restore([{**c, "patch_num": c["patch_num"][:n_cfg]} for c in cs], names)
+        lay = [i for i, n in enumerate(names) if n.endswith("|all")]
+        top = sorted(lay, key=lambda i: -R[i])[:6]
+        lines.append(f"- {gname}: " + ", ".join(f"{names[i]}={R[i]:.3f}" for i in top))
+        for comp in ("cross", "head"):
+            ih = [i for i, n in enumerate(names) if n.startswith(comp + "|") and "|h" in n]
+            if ih:
+                rr = R[ih]
+                o = np.argsort(-rr)
+                lines.append(f"  - per-head `{comp}`@future: total {rr.sum():.3f}, top-10 {rr[o[:10]].sum():.3f}, "
+                             f"top-20 {rr[o[:20]].sum():.3f}; top-5 " +
+                             ", ".join(names[ih[j]].split("|")[1] + names[ih[j]].split("|")[3] for j in o[:5]))
+    lines.append("")
 
     # ---- decomposition
     lines += ["## Exact decomposition: ||W_O^h (x_cf - x_fac)|| at target positions (mean over cells)", ""]
@@ -354,7 +383,14 @@ def write_summary(run: RunDir, cfg: Exp2Config) -> None:
               "  other future: " + ", ".join(f"{v:.2f}" for v in fut_l),
               "  context: " + ", ".join(f"{v:.2f}" for v in ctx_l), "",
               f"Spearman(REG mass, g): sample level rho={rho:.3f} (p={pv:.2g}, n={len(g_all)}); "
-              f"cell level rho={rho_c:.3f} (p={pv_c:.2g}, n={len(cell_g)}).", ""]
+              f"cell level rho={rho_c:.3f} (p={pv_c:.2g}, n={len(cell_g)}).", "",
+              "Within input x L (sample level):"]
+    for gname, cs in sub.items():
+        s = np.concatenate([c["reg_shares"][c["keep"]][..., 0].mean(axis=(1, 2)) for c in cs])
+        g = np.concatenate([M.effect_gain(c["e_hat"][c["keep"]], c["e"][c["keep"]]) for c in cs])
+        r_, p_ = spearmanr(s, g)
+        lines.append(f"  {gname}: rho={r_:.3f} (p={p_:.2g}, n={len(g)}), mean REG mass {s.mean():.3f}")
+    lines.append("")
     fig, axs = plt.subplots(1, 2, figsize=(7.5, 3.0))
     axs[0].scatter(cell_share, cell_g, s=10)
     axs[0].set_xlabel("mean REG mass (target future queries)")
@@ -393,6 +429,16 @@ def write_summary(run: RunDir, cfg: Exp2Config) -> None:
             mm = np.median(np.concatenate([c["mase_crossgain"][gi] / c["mase_crossgain"][i1] for c in cs]))
             cellsv.append(f"{gg:.3f} / {rr:.3f} / {mm:.3f}")
         lines.append(f"| {gname} | " + " | ".join(cellsv) + " |")
+    lines.append("")
+    lines += ["Per cell: gamma maximising median g, and whether that max reaches 0.9:", ""]
+    for inp in sorted({c["input"] for c in cells}):
+        best = []
+        for c in (c for c in cells if c["input"] == inp):
+            gs = [np.median(M.effect_gain(c["e_crossgain"][gi][c["keep"]], c["e"][c["keep"]])) for gi in range(len(cgv))]
+            best.append((max(gs), float(cgv[int(np.argmax(gs))])))
+        cnt = {f"{v:g}": int(sum(b[1] == v for b in best)) for v in cgv}
+        lines.append(f"- input={inp}: {len(best)} cells, max g >= 0.9 in {sum(b[0] >= 0.9 for b in best)}; "
+                     f"argmax gamma counts {cnt}")
     lines.append("")
     out = rep / f"exp2_summary_{cfg.run_name}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
