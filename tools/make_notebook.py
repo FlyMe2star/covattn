@@ -41,6 +41,13 @@ cells = [
              "!python scripts/exp1_phenomenon.py --summary-only && head -30 $RESULTS_DIR/reports/exp1_summary_main.md"),
     ("code", "# complete / re-run Exp1 on this GPU (resumable; skips finished cells)\n"
              "# !python scripts/exp1_phenomenon.py --resume --batch-size 256"),
+    ("md", "## Stage 1 - Exp2 (mechanism: decomposition, patching, REG sink, cross-gain preview)\n"
+           "Val split. 48 cells = 6 systems x L{512,2048} x {prbs, multisine} x {step, pulse}, 64 pairs each. "
+           "The script prints its own time estimate for this GPU (expect roughly 1 h on L4)."),
+    ("code", "!python -m pytest -q tests/test_hooks.py\n"
+             "!python scripts/exp2_mechanism.py --quick --resume --run-name colab_quick 2>&1 | grep -E 'ESTIMATED|done|Error|Traceback'"),
+    ("code", "!python scripts/exp2_mechanism.py --resume 2>&1 | grep -v -E 'Loading weights|UserWarning|warnings.warn'"),
+    ("code", "!head -120 $RESULTS_DIR/reports/exp2_summary_main.md"),
     ("md", "## Later stages (cells added as they are implemented)"),
 ]
 

@@ -209,7 +209,31 @@ class Chronos2Wrapper:
             "future_covariates": torch.from_numpy(fut.reshape(n * rows, -1)).to(self.device),
             "group_ids": torch.from_numpy(group_ids).to(self.device),
             "num_output_patches": n_patches,
+            "rows": rows,  # target is row 0 of every group of `rows` consecutive rows
+            "H": H,
         }
+
+    # ---------------------------------------------------------------- hooked execution
+    @property
+    def hooked(self):
+        if not hasattr(self, "_hooked"):
+            from covattn.hooks import HookedChronos2
+
+            self._hooked = HookedChronos2(self.model)
+        return self._hooked
+
+    def prepare_hooked(self, batch: CovBatch):
+        with autocast_ctx(self.device, self.amp):
+            return self.hooked.prepare(self.build_model_inputs(batch))
+
+    def forward_with_hooks(self, batch_or_prepared, spec=None):
+        """Hooked forward (see covattn.hooks). Accepts a CovBatch or the result of prepare_hooked.
+        Returns (target quantiles (N, Q, H) tensor, record dict)."""
+        from covattn.hooks import Prepared
+
+        P = batch_or_prepared if isinstance(batch_or_prepared, Prepared) else self.prepare_hooked(batch_or_prepared)
+        with autocast_ctx(self.device, self.amp):
+            return self.hooked.run(P, spec)
 
     @torch.no_grad()
     def forward_raw(self, batch: CovBatch, output_attentions: bool = False):

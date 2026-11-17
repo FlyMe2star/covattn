@@ -1,5 +1,7 @@
 """Model tests (need the Chronos-2 weights; run with `pytest -m model`)."""
 
+import os
+
 import numpy as np
 import pytest
 torch = pytest.importorskip("torch")
@@ -11,7 +13,7 @@ pytestmark = pytest.mark.model
 def wrapper():
     from covattn.model import Chronos2Wrapper
 
-    return Chronos2Wrapper("amazon/chronos-2", device="auto", amp="off", batch_size=256)
+    return Chronos2Wrapper("amazon/chronos-2", device=os.environ.get("COVATTN_DEVICE", "auto"), amp="off", batch_size=256)
 
 
 def _batch(n=6, k=1, L=300, H=64, seed=0):
