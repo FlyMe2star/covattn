@@ -95,3 +95,88 @@ def last_window(series: list[np.ndarray], L: int, H: int) -> tuple[np.ndarray, n
         ctx[i, L - len(c):] = c
         yt[i] = s[-H:]
     return ctx, yt
+
+
+# ------------------------------------------------------------------------------------ fev-bench covariate tasks
+FREQ_SUFFIXES = ("15T", "30T", "1H", "1D", "1W", "1M")
+
+
+def fev_path(config: str) -> str:
+    """fev dataset_config -> directory in autogluon/fev_datasets (e.g. entsoe_15T -> entsoe/15T)."""
+    for s in FREQ_SUFFIXES:
+        if config.endswith("_" + s):
+            return config[: -len(s) - 1] + "/" + s
+    return config
+
+
+def _encode_cov(values: list[np.ndarray]) -> list[np.ndarray]:
+    """One covariate over several series -> float arrays. Numeric/bool -> float; anything else ->
+    integer codes shared across the series (missing -> NaN)."""
+    cat = np.concatenate([np.asarray(v, dtype=object) for v in values])
+    try:
+        flat = cat.astype(np.float64)
+    except (TypeError, ValueError):
+        codes, _ = pd.factorize(pd.Series(cat), use_na_sentinel=True)
+        flat = codes.astype(np.float64)
+        flat[codes < 0] = np.nan
+    out, i = [], 0
+    for v in values:
+        out.append(flat[i : i + len(v)].astype(np.float32))
+        i += len(v)
+    return out
+
+
+def load_fev_task(task: dict, n_series: int) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """First `n_series` series (sorted by id) of a fev-bench task: [(id, target (T,), known covs (K, T))]."""
+    df = _hub_parquets("autogluon/fev_datasets", fev_path(task["config"]))
+    if "id" in df.columns:
+        df = df.sort_values("id", kind="stable")
+    df = df.head(n_series).reset_index(drop=True)
+    covs = {c: _encode_cov(list(df[c])) for c in task["known"]}
+    out = []
+    for i in range(len(df)):
+        y = np.asarray(df.at[i, task["target"]], dtype=np.float32)
+        c = np.stack([covs[k][i] for k in task["known"]])
+        out.append((str(df.at[i, "id"]) if "id" in df.columns else str(i), y, c))
+    return out
+
+
+def fev_windows(series: list[tuple[str, np.ndarray, np.ndarray]], H: int, n_test: int, n_val: int, L_max: int,
+                min_ctx: int):
+    """Rolling origins as in fev-bench: test origins T - H*(n_test - i), i = 0..n_test-1; validation origins are the
+    n_val windows just before the first test origin. Context = up to L_max points (left-padded with NaN to a common
+    L). Returns {split: (ctx (N,L), cov_past (N,K,L), cov_fut (N,K,H), y_true (N,H), series index (N,))}."""
+    origins = {"test": [], "val": []}
+    for si, (_, y, _) in enumerate(series):
+        T = len(y)
+        for i in range(n_test):
+            o = T - H * (n_test - i)
+            if o >= min_ctx:
+                origins["test"].append((si, o))
+        for j in range(1, n_val + 1):
+            o = T - H * (n_test + j)
+            if o >= min_ctx:
+                origins["val"].append((si, o))
+    all_o = [o for v in origins.values() for _, o in v]
+    if not all_o:
+        return {}
+    L = min(L_max, max(all_o))
+    K = series[0][2].shape[0]
+    out = {}
+    for split, ol in origins.items():
+        if not ol:
+            continue
+        n = len(ol)
+        ctx = np.full((n, L), np.nan, np.float32)
+        cp = np.full((n, K, L), np.nan, np.float32)
+        cf = np.empty((n, K, H), np.float32)
+        yt = np.empty((n, H), np.float32)
+        for r, (si, o) in enumerate(ol):
+            _, y, c = series[si]
+            a = max(0, o - L)
+            ctx[r, L - (o - a):] = y[a:o]
+            cp[r, :, L - (o - a):] = c[:, a:o]
+            cf[r] = c[:, o : o + H]
+            yt[r] = y[o : o + H]
+        out[split] = (ctx, cp, cf, yt, np.array([si for si, _ in ol]))
+    return out

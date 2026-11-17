@@ -69,7 +69,7 @@ cells = [
     ("code", "!python scripts/exp3_repair.py --resume --run-name v2 --add-methods ft_lora 2>&1 | grep -v -E 'Loading weights|Writing model|UserWarning|FutureWarning|warnings.warn|it/s]'\n"
              "!grep -E 'FAILED|crashed|Traceback|added' $RESULTS_DIR/exp3/v2/log.txt | tail -5"),
     ("code", "!python scripts/exp4_real_and_univariate.py --resume --run-name v2lora --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'\n"
-             "!head -40 $RESULTS_DIR/reports/exp3_summary_v2.md; cat $RESULTS_DIR/reports/exp4_summary_v2l.md"),
+             "!head -40 $RESULTS_DIR/reports/exp3_summary_v2.md; cat $RESULTS_DIR/reports/exp4_summary_v2lora.md"),
     ("md", "## Stage 3 - Exp5 (ablations), figures, tables\n"
            "Exp5 needs the Exp3 run `v2` (R1 ranking, k/gamma, R2 gates). About 20-30 min on L4 (rough)."),
     ("code", "!python scripts/exp5_ablations.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|UserWarning|warnings.warn|it/s]'\n"
@@ -78,6 +78,17 @@ cells = [
              "python scripts/make_tables.py --exp3-run v2 --exp4-run v2lora --exp5-run main\n"
              "!ls $RESULTS_DIR/reports/figs/fig* $RESULTS_DIR/reports/tables/table?_*.tex; "
              "head -60 $RESULTS_DIR/reports/exp5_summary_main.md"),
+    ("md", "## Stage 4 - real-world evidence, seeds, other TSFMs\n"
+           "Run in this order (most important first); each is resumable and independent. Rough L4 times: Exp6 1-2 h "
+           "(28 fev-bench covariate tasks + semi-synthetic EPF), Exp8 ~30-60 min (Chronos-2, TimesFM 3.0, "
+           "TimesFM 2.5 + XReg), Exp7 ~1 h (R2 x 3 training seeds, test x 3 sample seeds). A100 is much faster."),
+    ("code", "!python scripts/exp6_real_world.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'FAILED|crashed' $RESULTS_DIR/exp6/main/log.txt | tail -5; head -50 $RESULTS_DIR/reports/exp6_summary_main.md"),
+    ("code", "!python scripts/exp8_other_models.py --quick 2>&1 | grep -E '\\| g |FAILED|skipped|Error|Traceback' | tail -8\n"
+             "!python scripts/exp8_other_models.py --resume 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'FAILED|crashed|skipped' $RESULTS_DIR/exp8/main/log.txt | tail -5; cat $RESULTS_DIR/reports/exp8_summary_main.md"),
+    ("code", "!python scripts/exp7_seeds.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|UserWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'crashed' $RESULTS_DIR/exp7/main/log.txt | tail -3; head -30 $RESULTS_DIR/reports/exp7_summary_main.md"),
 ]
 
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},

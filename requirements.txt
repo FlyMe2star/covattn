@@ -16,3 +16,6 @@ matplotlib==3.11.2
 statsmodels==0.15.0
 peft==0.21.3
 pytest==9.2.0
+# Exp8 (other TSFMs, phenomenon only). TimesFM 2.5 XReg additionally needs jax + scikit-learn (preinstalled on
+# Colab; locally: jax[cpu]==0.10.2 scikit-learn==1.9.1).
+timesfm==3.0.2
