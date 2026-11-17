@@ -29,6 +29,7 @@ import torch
 
 from covattn import metrics as M
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
+from covattn.latex import DOWN, TO1, UP, mark_best, rows_to_tex
 from covattn.model import CovBatch, time_estimates
 from covattn.repair import gain_spec, head_ranking, r1_gain
 from covattn.systems import SampleSpec, default_systems, make_counterfactual, make_rng, make_sample, quick_systems
@@ -212,6 +213,66 @@ def _label(m: str) -> str:
     return m
 
 
+TAB_LABEL = {"zeroshot": "Zero-shot (no gain)", "r1": "R1: top-$k$ of the Exp2 ranking",
+             "r1_trainrank": "top-$k$, ranking from train systems only", "r2": "R2 (learned gates)"}
+
+
+def _tab_label(m: str) -> str:
+    if m in TAB_LABEL:
+        return TAB_LABEL[m]
+    if m.startswith("random"):
+        return f"random $k$ heads, draw {m[6:]}"
+    if m.startswith("r1_layers"):
+        return f"top-$k$ within layers {m[9:].replace('-', '--')}"
+    return m
+
+
+def write_tables(tex_rows: list, cfg, rep) -> None:
+    """table4_ablations: head sets (g / r / err ratio, all inputs); table4b_sensitivity: g of zero-shot / R1 / R2
+    across delta, L and snr (the base setting delta=1, L=512, snr=10 comes from the heads part)."""
+    heads = [(m, s) for part, m, _, s in tex_rows if part == "heads"]
+    if heads:
+        st = dict(heads)
+        order = ["zeroshot", "r1", "r1_trainrank"] + sorted(m for m in st if m.startswith("random")) + \
+                sorted(m for m in st if m.startswith("r1_layers")) + ["r2"]
+        order = [m for m in order if m in st]
+        cand = [m not in ("zeroshot", "r2") for m in order]  # bold: best head set for the fixed (k, gamma)
+        cols = [mark_best([st[m][0] for m in order], ".2f", "one", cand),
+                mark_best([st[m][1] for m in order], ".2f", "max", cand),
+                mark_best([st[m][2] for m in order], ".2f", "min", cand)]
+        rows = []
+        for i, m in enumerate(order):
+            if m in ("r1", "r2") and i > 0:
+                rows.append("\\midrule")
+            rows.append([_tab_label(m)] + [c[i] for c in cols])
+        hdr = [f"Gain applied to (same $k$, $\\gamma$) & $g${TO1} & $r${UP} & err.\\ ratio{DOWN} \\\\"]
+        (rep / "tables" / f"table4_ablations_{cfg.run_name}.tex").write_text(rows_to_tex("l ccc", hdr, rows),
+                                                                            encoding="utf-8")
+    sweep = [(part, m, v, s) for part, m, v, s in tex_rows if part != "heads"]
+    if sweep:
+        parts = [p for p in ("delta", "L", "snr") if any(x[0] == p for x in sweep)]
+        name = {"delta": "Counterfactual size $\\delta$", "L": "Context length $L$", "snr": "SNR"}
+        vals = {p: sorted({float(x[2]) for x in sweep if x[0] == p}) for p in parts}
+
+        def vfmt(p, v):
+            return "$\\infty$" if not np.isfinite(v) else f"{v:g}"
+
+        hdr = [" & " + " & ".join(f"\\multicolumn{{{len(vals[p])}}}{{c}}{{{name[p]}}}" for p in parts) + " \\\\"]
+        cm, c0 = [], 2
+        for p in parts:
+            cm.append(f"\\cmidrule(lr){{{c0}-{c0 + len(vals[p]) - 1}}}")
+            c0 += len(vals[p])
+        hdr += [" ".join(cm), "Method ($g$) & " + " & ".join(vfmt(p, v) for p in parts for v in vals[p]) + " \\\\"]
+        look = {(p, m, float(v)): s for p, m, v, s in sweep}
+        rows = []
+        for m in ("zeroshot", "r1", "r2"):
+            rows.append([{"zeroshot": "Zero-shot", "r1": "R1", "r2": "R2"}[m]] +
+                        [f"{look[(p, m, v)][0]:.2f}" if (p, m, v) in look else "--" for p in parts for v in vals[p]])
+        spec = "l " + " ".join("c" * len(vals[p]) for p in parts)
+        (rep / "tables" / f"table4b_sensitivity_{cfg.run_name}.tex").write_text(
+            "\\setlength{\\tabcolsep}{3.5pt}\n" + rows_to_tex(spec, hdr, rows), encoding="utf-8")
+
+
 def _stats(cs: list[dict], m: str, shapes: list[str]) -> tuple[float, float, float, int]:
     gs, rs, er = [], [], []
     for c in cs:
@@ -271,7 +332,7 @@ def write_summary(run: RunDir, cfg: Exp5Config) -> None:
                 s = _stats(cs, m, cfg.shapes)
                 lines.append(f"| {_label(m)} | {s[0]:.3f} | {s[1]:.3f} | {s[2]:.3f} | {s[3]} |")
                 if gname == "all inputs":
-                    tex_rows.append(("heads", _label(m), s))
+                    tex_rows.append(("heads", m, None, s))
             lines.append("")
         # overlap of the head sets with the R1 set
         hs = hi.get("head_sets", {})
@@ -321,7 +382,7 @@ def write_summary(run: RunDir, cfg: Exp5Config) -> None:
                     s = _stats(cs, m, cfg.shapes) if cs else (np.nan,) * 4
                     row.append(f"{s[0]:.3f} / {s[2]:.3f}")
                     if gname == "all inputs":
-                        tex_rows.append((part, f"{_label(m)} @ {var_of}={v:g}", s))
+                        tex_rows.append((part, m, v, s))
                 lines.append(f"| {_label(m)} | " + " | ".join(row) + " |")
             lines.append("")
         lines += ["(cells: median g / err ratio vs zero-shot)", ""]
@@ -347,17 +408,7 @@ def write_summary(run: RunDir, cfg: Exp5Config) -> None:
                   f"`exp3_summary_{cfg.exp3_run}.md`; L=512/2048 are in the same file.", ""]
     out = rep / f"exp5_summary_{cfg.run_name}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
-    if tex_rows:
-        tex = ["\\begin{tabular}{l l ccc}", "\\toprule", "Ablation & Variant & $g$ & $r$ & err.\\ ratio \\\\", "\\midrule"]
-        last = None
-        for part, lbl, s in tex_rows:
-            if last is not None and part != last:
-                tex.append("\\midrule")
-            tex.append(f"{part if part != last else ''} & {lbl.replace('_', ' ')} & {s[0]:.2f} & {s[1]:.2f} & "
-                       f"{s[2]:.2f} \\\\")
-            last = part
-        tex += ["\\bottomrule", "\\end{tabular}"]
-        (rep / "tables" / f"table4_ablations_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+    write_tables(tex_rows, cfg, rep)
     log.info("summary written: %s", out)
 
 

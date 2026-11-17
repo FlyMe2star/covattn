@@ -35,6 +35,7 @@ from covattn import metrics as M
 from covattn.baselines import arx_effects, dither_predict
 from covattn.fev_tasks import FEV_REVISION, TASKS
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
+from covattn.latex import DOWN, TO1, UP, mark_best, rows_to_tex
 from covattn.model import CovBatch
 from covattn.real_data import EPF, fev_windows, load_epf, load_fev_task
 from covattn.repair import gain_spec, r1_gain
@@ -315,8 +316,8 @@ def write_summary(run: RunDir, cfg: Exp6Config) -> None:
         lines += ["", "Aggregate over tasks (geometric mean of the ratio to zero-shot, 95% bootstrap CI over tasks with "
                   "2000 resamples; wins / losses = tasks with ratio < 0.99 / > 1.01):", "",
                   "| method | WQL gmean [95% CI] | MASE gmean [95% CI] | WQL wins / losses | tasks |", "|---|---|---|---|---|"]
-        tex = ["\\begin{tabular}{l cccc}", "\\toprule", "Method & WQL & MASE & wins/losses & tasks \\\\", "\\midrule"]
         brng = np.random.default_rng(0)
+        trows = []  # (method, gmean wql, ci wql, gmean mase, ci mase, wins, losses)
 
         def ci(v: list[float]) -> tuple[float, float]:
             v = np.asarray(v)
@@ -330,10 +331,28 @@ def write_summary(run: RunDir, cfg: Exp6Config) -> None:
             cw, cm = ci(v), ci(rel[m]["mase"])
             lines.append(f"| {LABEL[m]} | {_gmean(v):.3f} [{cw[0]:.3f}, {cw[1]:.3f}] | {_gmean(rel[m]['mase']):.3f} "
                          f"[{cm[0]:.3f}, {cm[1]:.3f}] | {wins} / {loss} | {len(v)} |")
-            tex.append(f"{LABEL[m]} & {_gmean(v):.3f} [{cw[0]:.2f}, {cw[1]:.2f}] & {_gmean(rel[m]['mase']):.3f} & "
-                       f"{wins}/{loss} & {len(v)} \\\\")
-        tex += ["\\bottomrule", "\\end{tabular}"]
-        (rep / "tables" / f"table5_fev_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+            trows.append((m, _gmean(v), cw, _gmean(rel[m]["mase"]), cm, wins, loss))
+        # Bold = lowest ratio among the training-free covariate methods (the no-covariate row is an ablation and the
+        # fine-tuned rows are references). Ratios < 1 beat zero-shot with covariates.
+        cand = [t[0] in ("r1", "r2", "r1_val", "r2_val") for t in trows]
+        bw = mark_best([t[1] for t in trows], ".3f", "min", cand)
+        bm = mark_best([t[3] for t in trows], ".3f", "min", cand)
+        hdr = [f"Method & WQL ratio{DOWN} [95\\% CI] & MASE ratio{DOWN} [95\\% CI] & W / L \\\\"]
+        rows = [["Zero-shot (reference)", "1", "1", "--"]]
+        for i, (m, gw, cw, gm, cm, wins, loss) in enumerate(trows):
+            if m in ("nocov", "r1", "r1_val", "ft_full"):
+                rows.append("\\midrule")
+            rows.append([LABEL[m], f"{bw[i]} [{cw[0]:.3f}, {cw[1]:.3f}]", f"{bm[i]} [{cm[0]:.3f}, {cm[1]:.3f}]",
+                         f"{wins} / {loss}"])
+        (rep / "tables" / f"table5_fev_{cfg.run_name}.tex").write_text(
+            "\\setlength{\\tabcolsep}{4pt}\n" + rows_to_tex("l ccc", hdr, rows), encoding="utf-8")
+        # the same numbers for the figure (so figure and table share one bootstrap)
+        tasks = [r["task"] for r in sorted(fev, key=lambda r: r["task"])]
+        agg = {"tasks": tasks, "methods": {
+            m: {"label": LABEL[m], "wql_gmean": gw, "wql_ci": list(cw), "mase_gmean": gm, "mase_ci": list(cm),
+                "wins": wins, "losses": loss, "wql_ratio": rel[m]["wql"]}
+            for m, gw, cw, gm, cm, wins, loss in trows}}
+        (rep / f"exp6_fev_aggregate_{cfg.run_name}.json").write_text(json.dumps(agg, indent=1), encoding="utf-8")
         # does R1 help more where covariates matter? (covariate value = WQL(no cov) / WQL(cov), zero-shot)
         cv, r1r = [], []
         for r in fev:
@@ -379,7 +398,7 @@ def write_summary(run: RunDir, cfg: Exp6Config) -> None:
                   f"effect std = kappa x background std; counterfactual = 1 std step / pulse; {cfg.semi_windows} "
                   "windows per background. Per method: median g / shape r / what-if NRMSE / factual error ratio vs "
                   "zero-shot / n pairs.", ""]
-        tex = ["\\begin{tabular}{l cccc}", "\\toprule", "Method & $g$ & $r$ & NRMSE & err.\\ ratio \\\\", "\\midrule"]
+        all_rows = []
         for gname, cs in groups:
             cs = [c for c in cs]
             if not cs:
@@ -390,11 +409,22 @@ def write_summary(run: RunDir, cfg: Exp6Config) -> None:
                 s = stats(cs, m)
                 lines.append(f"| {LABEL[m]} | {s[0]:.3f} | {s[1]:.3f} | {s[2]:.3f} | {s[3]:.3f} | {s[4]} |")
                 if gname == "all":
-                    tex.append(f"{LABEL[m]} & {s[0]:.2f} & {s[1]:.2f} & {s[2]:.2f} & "
-                               f"{'--' if not np.isfinite(s[3]) else f'{s[3]:.2f}'} \\\\")
+                    all_rows.append((m, s))
             lines.append("")
-        tex += ["\\bottomrule", "\\end{tabular}"]
-        (rep / "tables" / f"table6_semisynth_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+        # Bold = best training-free method per column; fine-tuned models and ARX are reference rows.
+        # (the error ratio is relative to zero-shot, so the zero-shot row is not a candidate in that column)
+        cand = [m in ("zeroshot", "r1", "r2", "dither") for m, _ in all_rows]
+        cand_err = [c and m != "zeroshot" for c, (m, _) in zip(cand, all_rows)]
+        cols = [mark_best([s[j] for _, s in all_rows], ".2f", mode, cand if j < 3 else cand_err)
+                for j, mode in ((0, "one"), (1, "max"), (2, "min"), (3, "min"))]
+        hdr = [f"Method & $g${TO1} & $r${UP} & NRMSE{DOWN} & err.\\ ratio{DOWN} \\\\"]
+        rows = []
+        for i, (m, _) in enumerate(all_rows):
+            if m in ("ft_full", "arx") and i > 0:
+                rows.append("\\midrule")
+            rows.append([LABEL[m]] + [c[i] for c in cols])
+        (rep / "tables" / f"table6_semisynth_{cfg.run_name}.tex").write_text(rows_to_tex("l cccc", hdr, rows),
+                                                                             encoding="utf-8")
     out = rep / f"exp6_summary_{cfg.run_name}.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     log.info("summary written: %s", out)

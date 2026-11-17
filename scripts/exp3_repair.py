@@ -30,6 +30,7 @@ import torch
 from covattn import metrics as M
 from covattn.baselines import arx_effects, dither_predict, finetune
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
+from covattn.latex import mark_best, rows_to_tex
 from covattn.model import CovBatch, time_estimates
 from covattn.repair import (
     R2Config,
@@ -378,6 +379,9 @@ METHOD_LABEL = {"zeroshot": "Zero-shot", "r1": "R1 (top-k gain)", "r2": "R2 (gat
                 "ft_full": "Full fine-tune", "ft_lora": "LoRA", "arx": "ARX (context fit)"}
 
 
+TRAINING_FREE = ("zeroshot", "r1", "r2", "dither")
+
+
 def write_summary(run: RunDir, cfg: Exp3Config) -> None:
     recs = run.read_metrics()
     if not recs:
@@ -439,21 +443,39 @@ def write_summary(run: RunDir, cfg: Exp3Config) -> None:
         lines.append("")
     out = rep / f"exp3_summary_{cfg.run_name}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
-    # LaTeX table 1: settings as column groups (g / r / NRMSE), plus params
+    # LaTeX table 1: settings as column groups (g / what-if NRMSE), plus params; 14 numeric columns (with shape r)
+    # do not fit the LNCS text width, so r is left to the markdown summary (Table 1r variant below has it).
+    # Bold = best training-free method per column (g: closest to 1; NRMSE: lowest); fine-tuned models and ARX are
+    # reference rows.
     sets = [s for s in SETTINGS if (s, methods[0]) in table]
-    tex = ["\\begin{tabular}{l r " + " ".join(["ccc"] * len(sets)) + "}", "\\toprule",
-           "Method & Params & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{{s}}}" for s in sets) + " \\\\",
-           " & & " + " & ".join(["$g$ & $r$ & NRMSE"] * len(sets)) + " \\\\", "\\midrule"]
-    for m in methods:
+    cand = [m in TRAINING_FREE for m in methods]
+    short = {"r1": "R1", "r2": "R2", "dither": "Dither", "ft_full": "Full FT", "ft_lora": "LoRA", "arx": "ARX"}
+
+    def params_str(m: str) -> str:
         p = params.get(m)
-        ps = "--" if p is None else (f"{p/1e6:.1f}M" if p >= 1e6 else (f"{p/1e3:.0f}k" if p >= 1e4 else str(p)))
-        cellsv = []
-        for s in sets:
-            g, r, n, _, _ = table[(s, m)]
-            cellsv += [f"{g:.2f}", f"{r:.2f}", f"{n:.2f}"]
-        tex.append(f"{METHOD_LABEL[m]} & {ps} & " + " & ".join(cellsv) + " \\\\")
-    tex += ["\\bottomrule", "\\end{tabular}"]
-    (rep / "tables" / f"table1_synthetic_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+        return "--" if p is None else (f"{p/1e6:.1f}M" if p >= 1e6 else (f"{p/1e3:.0f}k" if p >= 1e4 else str(p)))
+
+    def build(metrics: list[tuple[int, str, str]]) -> str:
+        nm = len(metrics)
+        cols = {(s, j): mark_best([table[(s, m)][j] for m in methods], ".2f", mode, cand)
+                for s in sets for j, mode, _ in metrics}
+        hdr = ["Method & Params & " + " & ".join(f"\\multicolumn{{{nm}}}{{c}}{{{s}}}" for s in sets) + " \\\\",
+               " ".join(f"\\cmidrule(lr){{{3 + nm * i}-{2 + nm * (i + 1)}}}" for i in range(len(sets))),
+               " & & " + " & ".join([" & ".join(h for _, _, h in metrics)] * len(sets)) + " \\\\"]
+        rows = []
+        for i, m in enumerate(methods):
+            if m in ("ft_full", "arx") and i > 0:
+                rows.append("\\midrule")
+            rows.append([short.get(m, METHOD_LABEL[m]), params_str(m)] +
+                        [cols[(s, j)][i] for s in sets for j, _, _ in metrics])
+        sep = "3pt" if nm < 3 else "2pt"  # wide variant only fits in a smaller font (appendix: \footnotesize)
+        return f"\\setlength{{\\tabcolsep}}{{{sep}}}\n" + rows_to_tex("l r " + " ".join(["c" * nm] * len(sets)),
+                                                                      hdr, rows)
+
+    (rep / "tables" / f"table1_synthetic_{cfg.run_name}.tex").write_text(
+        build([(0, "one", "$g$"), (2, "min", "NRMSE")]), encoding="utf-8")
+    (rep / "tables" / f"table1r_synthetic_with_r_{cfg.run_name}.tex").write_text(  # wide variant (appendix)
+        build([(0, "one", "$g$"), (1, "max", "$r$"), (2, "min", "NRMSE")]), encoding="utf-8")
     log.info("summary written: %s", out)
 
 

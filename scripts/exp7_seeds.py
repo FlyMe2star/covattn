@@ -26,6 +26,7 @@ import torch
 from covattn import metrics as M
 from covattn.baselines import dither_predict
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
+from covattn.latex import rows_to_tex
 from covattn.repair import R2Config, gain_spec, r1_gain, random_pairs, train_r2
 
 import exp3_repair as E3  # noqa: E402  (scripts/ is on sys.path when this file is run)
@@ -106,6 +107,10 @@ def r2_gates(w, cfg: Exp7Config, c3, seed: int, run: RunDir) -> torch.Tensor:
 
 
 # ------------------------------------------------------------------------------------ summary
+TAB_LABEL = {"zeroshot": "Zero-shot", "r1": "R1", "dither": "Dither (reimpl.)",
+             **{f"r2_s{k}": f"R2, training seed {k}" for k in range(10)}}
+
+
 def _pooled(cs: list[dict], m: str, shapes: list[str]) -> tuple[float, float]:
     gs, er = [], []
     for c in cs:
@@ -140,9 +145,10 @@ def write_summary(run: RunDir, cfg: Exp7Config) -> None:
     groups = [("all", lambda c: True), ("input=prbs", lambda c: c["input"] == "prbs"),
               ("input=multisine", lambda c: c["input"] == "multisine")]
     rng = np.random.default_rng(0)
-    tex = ["\\begin{tabular}{l cc cc}", "\\toprule",
-           "Method & $g$ (mean $\\pm$ sd) & $g$ 95\\% CI & err.\\ ratio (mean $\\pm$ sd) & err.\\ ratio 95\\% CI \\\\",
-           "\\midrule"]
+    trows = []  # rows of the LaTeX table ("all" group)
+
+    def sd(v: np.ndarray) -> float:
+        return float(v.std(ddof=1)) if len(v) > 1 else 0.0
     for gname, sel in groups:
         if not any(sel(c) for c in cells):
             continue
@@ -167,18 +173,34 @@ def write_summary(run: RunDir, cfg: Exp7Config) -> None:
                          f"{ev.mean():.3f} +- {ev.std(ddof=1) if len(ev) > 1 else 0:.3f} | "
                          f"[{ci_g[0]:.3f}, {ci_g[1]:.3f}] | [{ci_e[0]:.3f}, {ci_e[1]:.3f}] |")
             if gname == "all":
-                tex.append(f"{m.replace('_', ' ')} & {gv.mean():.3f} $\\pm$ {gv.std(ddof=1) if len(gv) > 1 else 0:.3f} & "
-                           f"[{ci_g[0]:.2f}, {ci_g[1]:.2f}] & {ev.mean():.3f} $\\pm$ "
-                           f"{ev.std(ddof=1) if len(ev) > 1 else 0:.3f} & [{ci_e[0]:.2f}, {ci_e[1]:.2f}] \\\\")
+                trows.append((m, [TAB_LABEL.get(m, m), f"{gv.mean():.3f} $\\pm$ {sd(gv):.3f}",
+                                  f"[{ci_g[0]:.3f}, {ci_g[1]:.3f}]", f"{ev.mean():.3f} $\\pm$ {sd(ev):.3f}",
+                                  f"[{ci_e[0]:.3f}, {ci_e[1]:.3f}]"]))
         r2 = [m for m in methods if m.startswith("r2_s")]
         if r2:
             allg = np.array([agg[m][i][0] for m in r2 for i in range(len(cfg.sample_seeds))])
             alle = np.array([agg[m][i][1] for m in r2 for i in range(len(cfg.sample_seeds))])
             lines += ["", f"R2 over {len(r2)} training x {len(cfg.sample_seeds)} sample seeds: g {allg.mean():.3f} +- "
                       f"{allg.std(ddof=1):.3f}, err ratio {alle.mean():.3f} +- {alle.std(ddof=1):.3f}"]
+            if gname == "all":
+                trows.append(("r2_all", [f"R2, all {len(r2)}$\\times${len(cfg.sample_seeds)} seed pairs",
+                                         f"{allg.mean():.3f} $\\pm$ {sd(allg):.3f}", "--",
+                                         f"{alle.mean():.3f} $\\pm$ {sd(alle):.3f}", "--"]))
         lines.append("")
-    tex += ["\\bottomrule", "\\end{tabular}"]
-    (rep / "tables" / f"table7_seeds_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+    # mean +- sd over the sample seeds (R2: per training seed, then pooled over training x sample seeds);
+    # 95% CI: cluster bootstrap over the cells of sample seed 0
+    order = ["zeroshot", "r1", "dither"] + [m for m, _ in trows if m.startswith("r2_s")] + ["r2_all"]
+    row_of = dict(trows)
+    hdr = [" & \\multicolumn{2}{c}{$g$} & \\multicolumn{2}{c}{err.\\ ratio vs zero-shot} \\\\",
+           "\\cmidrule(lr){2-3} \\cmidrule(lr){4-5}",
+           "Method & mean $\\pm$ sd & 95\\% CI & mean $\\pm$ sd & 95\\% CI \\\\"]
+    rows = []
+    for m in [m for m in order if m in row_of]:
+        if m in ("r2_s0", "r2_all"):
+            rows.append("\\midrule")
+        rows.append(row_of[m])
+    (rep / "tables" / f"table7_seeds_{cfg.run_name}.tex").write_text(
+        "\\setlength{\\tabcolsep}{4pt}\n" + rows_to_tex("l cc cc", hdr, rows), encoding="utf-8")
     (rep / f"exp7_summary_{cfg.run_name}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     log.info("summary written")
 

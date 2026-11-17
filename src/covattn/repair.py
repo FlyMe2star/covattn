@@ -108,8 +108,14 @@ def _ql_torch(q: torch.Tensor, y: torch.Tensor, quantiles: torch.Tensor) -> torc
 # ------------------------------------------------------------------------------------ R1
 def head_ranking(exp2_run_dir: Path, L: int = 512, comp: str = "cross",
                  systems: list[str] | None = None) -> list[tuple[int, int]]:
-    """(layer, head) sorted by pooled per-head restoration (future positions) over the Exp2 cells at L
-    (only cells of `systems` if given; cell files are named <system>_L<L>_<input>_<shape>.npz)."""
+    """(layer, head) sorted by pooled per-head restoration over the Exp2 cells at L (only cells of `systems` if
+    given; cell files are named <system>_L<L>_<input>_<shape>.npz).
+
+    The per-head patches exist for target future AND context positions (2 x n_layers x n_heads entries); all of
+    them are ranked together, so a head's rank is set by the larger of its future- and context-position
+    restoration and a head can appear twice in the returned list (callers take the first k entries; in the
+    canonical run exp2/main at L=512 the top 20 are 20 distinct heads). This is the ranking used by R1 in all
+    reported runs."""
     files = sorted((exp2_run_dir / "cells").glob(f"*_L{L}_*.npz"))
     if systems is not None:
         files = [f for f in files if any(f.name.startswith(f"{s}_L{L}_") for s in systems)]

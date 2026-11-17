@@ -29,6 +29,7 @@ from covattn import metrics as M
 from covattn.baselines import dither_predict
 from covattn.hooks import HookSpec
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
+from covattn.latex import DOWN, esc, mark_best, rows_to_tex
 from covattn.model import CovBatch
 from covattn.real_data import EPF, UNIVARIATE, last_window, load_epf, load_univariate, rolling_windows
 from covattn.repair import gain_spec, r1_gain
@@ -37,6 +38,11 @@ log = logging.getLogger("exp4")
 
 METHOD_LABEL = {"zeroshot": "Zero-shot", "r1": "R1 (top-k gain)", "r2": "R2 (gates)", "dither": "Dither (reimpl.)",
                 "ft_full": "Full fine-tune", "ft_lora": "LoRA"}
+TRAINING_FREE = ("zeroshot", "r1", "r2", "dither")
+COL_SHORT = {"r1": "R1", "r2": "R2", "dither": "Dither", "ft_full": "Full FT", "ft_lora": "LoRA"}
+DATASET_SHORT = {"epf_be": "BE", "epf_de": "DE", "epf_fr": "FR", "epf_np": "NP", "epf_pjm": "PJM",
+                 "exchange_rate": "Exchange", "monash_hospital": "Hospital", "monash_tourism_monthly": "Tourism",
+                 "nn5": "NN5", "ercot": "ERCOT"}
 
 
 @dataclass
@@ -197,17 +203,26 @@ def write_summary(run: RunDir, cfg: Exp4Config) -> None:
                                        for r in cov]))) for m in meths}
         lines += ["Geometric mean of MASE relative to zero-shot (with covariates): " +
                   ", ".join(f"{METHOD_LABEL[m]} {v:.3f}" for m, v in gm.items()), ""]
-        tex = ["\\begin{tabular}{l " + "c" * len(cov) + " cc}", "\\toprule",
-               "Method & " + " & ".join(r["dataset"].replace("_", "\\_") for r in cov) +
-               " & $\\Delta$shuf. & $\\Delta$no-cov \\\\", "\\midrule"]
-        for m in meths:
+        # Bold = lowest MASE among the training-free methods; fine-tuned rows are references. The two change
+        # columns describe covariate reliance (not better/worse), so nothing is marked there.
+        cand = [m in TRAINING_FREE for m in meths]
+        mcols = [mark_best([r["methods"][m]["cov"]["mase"] for m in meths], ".3f", "min", cand) for r in cov]
+        n = len(cov)
+        hdr = [f"& \\multicolumn{{{n}}}{{c}}{{MASE{DOWN}, with covariates}} & "
+               "\\multicolumn{2}{c}{$\\Delta$MASE, covariates} \\\\",
+               f"\\cmidrule(lr){{2-{n + 1}}} \\cmidrule(lr){{{n + 2}-{n + 3}}}",
+               "Method & " + " & ".join(DATASET_SHORT.get(r["dataset"], esc(r["dataset"])) for r in cov) +
+               " & shuffled & removed \\\\"]
+        rows = []
+        for i, m in enumerate(meths):
+            if m == "ft_full" and i > 0:
+                rows.append("\\midrule")
             ds = [r["methods"][m] for r in cov]
             dshuf = np.mean([100 * (x["shuf"]["mase"] / x["cov"]["mase"] - 1) for x in ds])
             dno = np.mean([100 * (x["nocov"]["mase"] / x["cov"]["mase"] - 1) for x in ds])
-            tex.append(f"{METHOD_LABEL[m]} & " + " & ".join(f"{x['cov']['mase']:.3f}" for x in ds) +
-                       f" & {dshuf:+.1f}\\% & {dno:+.1f}\\% \\\\")
-        tex += ["\\bottomrule", "\\end{tabular}"]
-        (rep / "tables" / f"table2_real_cov_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+            rows.append([METHOD_LABEL[m]] + [c[i] for c in mcols] + [f"{dshuf:+.1f}\\%", f"{dno:+.1f}\\%"])
+        tex = "\\setlength{\\tabcolsep}{4pt}\n" + rows_to_tex("l " + "c" * n + " cc", hdr, rows)
+        (rep / "tables" / f"table2_real_cov_{cfg.run_name}.tex").write_text(tex, encoding="utf-8")
     if uni:
         meths = [m for m in METHOD_LABEL if m in uni[0]["methods"]]
         lines += ["## B. Univariate datasets (last window): MASE / WQL", "",
@@ -223,14 +238,36 @@ def write_summary(run: RunDir, cfg: Exp4Config) -> None:
                 lines.append(f"- {METHOD_LABEL[m]}: max |q - q_hooks_off| = {d:.3g} (bit-identical if 0); "
                              f"max |q - q_zeroshot pipeline| / max|q| = {d0:.3g} (eager vs SDPA float error)")
         lines.append("")
-        tex = ["\\begin{tabular}{l " + "cc" * len(uni) + "}", "\\toprule",
-               "Method & " + " & ".join(f"\\multicolumn{{2}}{{c}}{{{r['dataset'].replace('_', chr(92) + '_')}}}" for r in uni) + " \\\\",
-               " & " + " & ".join(["MASE & WQL"] * len(uni)) + " \\\\", "\\midrule"]
-        for m in meths:
-            tex.append(f"{METHOD_LABEL[m]} & " + " & ".join(f"{r['methods'][m]['mase']:.3f} & {r['methods'][m]['wql']:.3f}"
-                                                         for r in uni) + " \\\\")
-        tex += ["\\bottomrule", "\\end{tabular}"]
-        (rep / "tables" / f"table3_univariate_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
+        # Rows whose printed values equal zero-shot in every column are merged into the zero-shot row (R1/R2 do not
+        # act on univariate inputs; the exact max differences are in the markdown summary).
+        def printed(m: str) -> list[str]:
+            return [f"{r['methods'][m][k]:{f}}" for r in uni for k, f in (("mase", ".3f"), ("wql", ".4f"))]
+
+        same = [m for m in meths if m != "zeroshot" and printed(m) == printed("zeroshot")]
+        show = [m for m in meths if m not in same]
+        label = {m: METHOD_LABEL[m] for m in show}
+        if same:
+            label["zeroshot"] = ("\\begin{tabular}[b]{@{}c@{}}Zero-shot\\\\= " +
+                                 " = ".join(METHOD_LABEL[m].split(" (")[0] for m in same) + "\\end{tabular}")
+        label.update({m: COL_SHORT[m] for m in show if m in COL_SHORT})
+        # transposed (datasets x metric as rows, methods as columns) so that it fits the LNCS text width;
+        # bold = lowest value among the training-free methods in each row
+        cand = [m in TRAINING_FREE for m in show]
+        n_free = sum(cand)
+        hdr = [f"& & \\multicolumn{{{n_free}}}{{c}}{{training-free}} & \\multicolumn{{{len(show) - n_free}}}{{c}}"
+               "{fine-tuned (ref.)} \\\\",
+               f"\\cmidrule(lr){{3-{2 + n_free}}} \\cmidrule(lr){{{3 + n_free}-{2 + len(show)}}}",
+               f"Dataset & Metric{DOWN} & " + " & ".join(label[m] for m in show) + " \\\\"]
+        rows = []
+        for j, r in enumerate(uni):
+            if j > 0:
+                rows.append("\\addlinespace[2pt]")
+            name = DATASET_SHORT.get(r["dataset"], esc(r["dataset"]))
+            for k, f in (("mase", ".3f"), ("wql", ".4f")):
+                rows.append([name if k == "mase" else "", k.upper()] +
+                            mark_best([r["methods"][m][k] for m in show], f, "min", cand))
+        tex = rows_to_tex("l l " + "c" * len(show), hdr, rows)
+        (rep / "tables" / f"table3_univariate_{cfg.run_name}.tex").write_text(tex, encoding="utf-8")
     out = rep / f"exp4_summary_{cfg.run_name}.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     log.info("summary written: %s", out)

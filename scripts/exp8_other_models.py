@@ -22,6 +22,7 @@ import torch
 
 from covattn import metrics as M
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
+from covattn.latex import TO1, mark_best, rows_to_tex
 from covattn.model import CovBatch
 from covattn.systems import (SampleSpec, default_systems, delta_u, make_counterfactual, make_rng, make_sample,
                              quick_systems)
@@ -29,6 +30,10 @@ from covattn.systems import (SampleSpec, default_systems, delta_u, make_counterf
 log = logging.getLogger("exp8")
 LABEL = {"chronos2": "Chronos-2", "timesfm3": "TimesFM 3.0", "timesfm25_xreg": "TimesFM 2.5 + XReg",
          "arx": "ARX (context fit)"}
+SUBSET_LABEL = {"all": "All test pairs", "family=F1": "F1 static", "family=F2": "F2 lag",
+                "family=F3": "F3 delay", "family=F4": "F4 resonant", "family=F5": "F5 tanh",
+                "input=prbs": "PRBS input", "input=multisine": "multisine input", "input=ar1": "AR(1) input",
+                "input=steps": "random-steps input", "L=512": "$L=512$", "L=2048": "$L=2048$"}
 
 
 @dataclass
@@ -165,19 +170,28 @@ def write_summary(run: RunDir, cfg: Exp8Config) -> None:
     lines = [f"# Exp8 summary ({cfg.run_name}) - other TSFMs", "", f"Source: `{run.metrics_file}`. Same test samples "
              f"as Exp3 `{cfg.exp3_run}` (ARX taken from there). Per model: median g [IQR] / median shape r / n pairs.", "",
              "| group | " + " | ".join(LABEL.get(m, m) for m in models) + " |", "|---|" + "---|" * len(models)]
-    tex = ["\\begin{tabular}{l " + "c" * len(models) + "}", "\\toprule",
-           "Group & " + " & ".join(LABEL.get(m, m) for m in models) + " \\\\", "\\midrule"]
+    # LaTeX: median g per group; models closest to 1 in bold among the TSFMs (ARX is a reference column).
+    trows = []
     for gname, sel in groups:
         if not any(sel(c) for c in cells):
             continue
-        row, trow = [], []
+        row, gs = [], []
         for m in models:
             s = stats([c for c in cells if c["model"] == m and sel(c)])
             row.append(f"{s[0]:.3f} [{s[1]:.2f}, {s[2]:.2f}] / {s[3]:.2f} / {s[4]}")
-            trow.append(f"{s[0]:.2f}")
+            gs.append(s[0])
         lines.append(f"| {gname} | " + " | ".join(row) + " |")
-        tex.append(f"{gname.replace('_', ' ')} & " + " & ".join(trow) + " \\\\")
-    tex += ["\\bottomrule", "\\end{tabular}"]
+        trows.append((gname, mark_best(gs, ".2f", "one", [m != "arx" for m in models])))
+    head = {"chronos2": "Chronos-2", "timesfm3": "TimesFM 3.0", "timesfm25_xreg": "TimesFM 2.5+XReg$^\\dagger$",
+            "arx": "ARX (ref.)"}
+    hdr = [f"Subset (median $g${TO1}) & " + " & ".join(head.get(m, LABEL.get(m, m)) for m in models) + " \\\\"]
+    rows = []
+    for gname, vals in trows:
+        kind = gname.split("=")[0]
+        if kind != "all" and not any(r == "\\midrule" and k == kind for r, k in rows):
+            rows.append(("\\midrule", kind))
+        rows.append(([SUBSET_LABEL.get(gname, gname)] + vals, kind))
+    tex = ("\\setlength{\\tabcolsep}{3pt}\n" + rows_to_tex("l " + "c" * len(models), hdr, [r for r, _ in rows])).splitlines()
     # Memoryless check: a response that is a scaled copy of the covariate change cannot carry dynamics.
     # pulse: corr over the horizon between e_hat and du (du is non-constant); step: du is constant, so a
     # memoryless response is constant too and its shape r vs the effect is undefined (float noise only).

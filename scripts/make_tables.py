@@ -5,7 +5,8 @@ metrics.jsonl / cell files) and copies the produced tables to canonical names wi
   reports/tables/table1_synthetic.tex   <- Exp3 run          (g, shape r, NRMSE, trainable params; ID / OOD settings)
   reports/tables/table2_real_cov.tex    <- Exp4 run          (EPF MASE/WQL, shuffled / no-covariate changes)
   reports/tables/table3_univariate.tex  <- Exp4 run          (univariate MASE/WQL)
-  reports/tables/table4_ablations.tex   <- Exp5 run          (optional)
+  reports/tables/table4_ablations.tex   <- Exp5 run          (head sets; optional)
+  reports/tables/table4b_sensitivity.tex <- Exp5 run        (delta / L / snr sweeps; optional)
   reports/tables/table5_fev.tex         <- Exp6 run          (fev-bench covariate tasks; optional)
   reports/tables/table6_semisynth.tex   <- Exp6 run          (semi-synthetic EPF; optional)
   reports/tables/table7_seeds.tex       <- Exp7 run          (seed robustness; optional)
@@ -63,12 +64,14 @@ def main() -> None:
     t.mkdir(parents=True, exist_ok=True)
     if summary("exp3_repair.py", "--run-name", a.exp3_run):
         copy(t / f"table1_synthetic_{a.exp3_run}.tex", t / "table1_synthetic.tex", f"exp3/{a.exp3_run}")
+        copy(t / f"table1r_synthetic_with_r_{a.exp3_run}.tex", t / "table1r_synthetic_with_r.tex", f"exp3/{a.exp3_run}")
     if summary("exp4_real_and_univariate.py", "--run-name", a.exp4_run, "--exp3-run", a.exp4_exp3_run or a.exp3_run):
         copy(t / f"table2_real_cov_{a.exp4_run}.tex", t / "table2_real_cov.tex", f"exp4/{a.exp4_run}")
         copy(t / f"table3_univariate_{a.exp4_run}.tex", t / "table3_univariate.tex", f"exp4/{a.exp4_run}")
     if (root / "exp5" / a.exp5_run / "metrics.jsonl").exists():
         if summary("exp5_ablations.py", "--run-name", a.exp5_run, "--exp3-run", a.exp3_run):
             copy(t / f"table4_ablations_{a.exp5_run}.tex", t / "table4_ablations.tex", f"exp5/{a.exp5_run}")
+            copy(t / f"table4b_sensitivity_{a.exp5_run}.tex", t / "table4b_sensitivity.tex", f"exp5/{a.exp5_run}")
     else:
         log.info("no Exp5 run %s yet - table 4 skipped", a.exp5_run)
     optional = [("exp6", a.exp6_run, "exp6_real_world.py", ["table5_fev", "table6_semisynth"]),

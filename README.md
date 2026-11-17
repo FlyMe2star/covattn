@@ -12,7 +12,7 @@ src/covattn/   systems.py (synthetic forced systems + exact counterfactuals), mo
                real_data.py (EPF covariate tasks, univariate datasets), metrics.py, io_utils.py
 scripts/       verify_model.py (stage-0 source checks), exp1_phenomenon.py, exp2_mechanism.py,
                exp3_repair.py, exp4_real_and_univariate.py, exp5_ablations.py,
-               make_figures.py (figures 1-5, PDF), make_tables.py (tables 1-8, LaTeX booktabs)
+               make_figures.py (figures 1-7, PDF), make_tables.py (tables 1-8, LaTeX booktabs)
 docs/          model_notes.md (verified model internals), model_facts.json
 colab/         run_all.ipynb (regenerate with `python tools/make_notebook.py`)
 tests/         pytest; `-m model` tests need the HF weights
@@ -97,8 +97,11 @@ Figures (`reports/figs/`): fig1 g by family and L with ARX (non-periodic inputs 
 fig2 true vs predicted effect, zero-shot / R1 / R2 (pair with the median zero-shot g of pre-declared cells);
 fig3 restoration heatmaps (per-head group-attn cross term; layer-level time-attn / group-attn / MLP);
 fig4 REG attention mass vs g and the REG-bias intervention; fig5 R1 k x gamma (val) and head-set ablation.
-Tables (`reports/tables/`): table1_synthetic, table2_real_cov, table3_univariate, table4_ablations,
-table5_fev, table6_semisynth, table7_seeds, table8_other_models.
+fig6 g of other TSFMs (Exp8); fig7 fev-bench per-task ratios and semi-synthetic g (Exp6).
+Tables (`reports/tables/`): table1_synthetic (+ table1r with shape r), table2_real_cov, table3_univariate,
+table4_ablations, table4b_sensitivity, table5_fev, table6_semisynth, table7_seeds, table8_other_models.
+Definitions and table/figure conventions (what is bold, what is a reference row): `docs/figures_tables.md`.
+Layout check in the LNCS page (needs pdflatex + llncs.cls): `python tools/paper_preview.py`.
 Exp8 note: TimesFM 2.5 + XReg is memoryless by construction (its what-if response is exactly a scaled copy of
 the covariate change; the Exp8 summary checks this), so its shape r on step pairs is undefined and the
 summary also reports shape r on pulse pairs only.
