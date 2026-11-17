@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -113,6 +114,9 @@ def parse_args() -> tuple[Exp3Config, argparse.Namespace]:
     p.add_argument("--device", default="auto")
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--summary-only", action="store_true")
+    p.add_argument("--add-methods", nargs="+", default=None, metavar="M",
+                   help="with --resume: evaluate only these methods (e.g. ft_lora) on the finished cells and merge "
+                        "them into the existing cell files (same samples, other methods untouched)")
     a = p.parse_args()
     cfg = Exp3Config(quick=a.quick, amp=a.amp, device=a.device, batch_size=a.batch_size)
     if a.quick:
@@ -267,7 +271,8 @@ def cell_key(s: str, L: int, inp: str) -> str:
     return f"{s}|L{L}|{inp}"
 
 
-def eval_cell(methods: dict, w, cfg: Exp3Config, sys, L: int, inp: str, run: RunDir) -> dict:
+def eval_cell(methods: dict, w, cfg: Exp3Config, sys, L: int, inp: str, run: RunDir,
+              save_key: str | None = None) -> dict:
     spec = SampleSpec(context_length=L, horizon=cfg.horizon, input_type=inp)
     rng = make_rng(cfg.seed, "test", "exp3", sys.key, L, inp)
     samples = [make_sample(sys, spec, rng) for _ in range(cfg.n_per_cell)]
@@ -304,7 +309,7 @@ def eval_cell(methods: dict, w, cfg: Exp3Config, sys, L: int, inp: str, run: Run
             g = M.effect_gain(arrays[f"ehat_{name}_{sh}"][k], arrays[f"e_{sh}"][k])
             mrec[f"g_{sh}"] = float(np.median(g)) if len(g) else float("nan")
         rec["methods"][name] = mrec
-    run.save_arrays(rec["key"], **arrays)
+    run.save_arrays(save_key or rec["key"], **arrays)
     return rec
 
 
@@ -330,6 +335,42 @@ def build_methods(w, cfg: Exp3Config, r1: dict, di: dict, gates: torch.Tensor, f
             params[f"ft_{mode}"] = ft[mode]["trainable_params"]
     methods["arx"] = None
     return methods, params
+
+
+def add_methods(names: list[str], methods: dict, w, cfg: Exp3Config, run: RunDir, cells: list) -> None:
+    """Evaluate `names` on already finished cells and merge them into the cell npz and metrics.jsonl.
+    The samples are regenerated from the same seeds; the stored targets/effects must match exactly."""
+    missing = [n for n in names if n not in methods]
+    if missing:
+        raise RuntimeError(f"methods {missing} are not available (fine-tuning failed or not run?)")
+    sub = {n: methods[n] for n in names}
+    recs = {r["key"]: r for r in run.read_metrics()}
+    t_start = time.time()
+    for i, (sys, L, inp) in enumerate(cells):
+        key = cell_key(sys.key, L, inp)
+        if key not in recs:
+            log.warning("cell %s not finished - run without --add-methods first", key)
+            continue
+        old = dict(np.load(run.cell_path(key), allow_pickle=False))
+        if all(f"ehat_{n}_{cfg.shapes[0]}" in old for n in names) and all(n in recs[key]["methods"] for n in names):
+            continue
+        tmp_run_key = key + "#add"
+        rec = eval_cell(sub, w, cfg, sys, L, inp, run, save_key=tmp_run_key)
+        new = dict(np.load(run.cell_path(tmp_run_key), allow_pickle=False))
+        run.cell_path(tmp_run_key).unlink()
+        for k in ("y_true",) + tuple(f"e_{sh}" for sh in cfg.shapes):
+            if not np.array_equal(old[k], new[k]):
+                raise RuntimeError(f"{key}: regenerated {k} differs from the stored one - not merging")
+        own = {f"qfac_{n}" for n in names} | {f"ehat_{n}_{sh}" for n in names for sh in cfg.shapes}
+        old.update({k: v for k, v in new.items() if k in own})
+        run.save_arrays(key, **old)
+        recs[key]["methods"].update(rec["methods"])
+        log.info("[%d/%d] %s +%s %s", i + 1, len(cells), key, names,
+                 {m: round(v.get(f"g_{cfg.shapes[0]}", float("nan")), 3) for m, v in rec["methods"].items()})
+    tmp = run.metrics_file.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(r) + "\n" for r in recs.values()), encoding="utf-8")
+    os.replace(tmp, run.metrics_file)
+    log.info("added %s to %d cells in %s", names, len(recs), fmt_seconds(time.time() - t_start))
 
 
 # ------------------------------------------------------------------------------------ summary
@@ -459,6 +500,10 @@ def main() -> None:
 
     lk = systems_by_key()
     cells = [(lk[s], L, inp) for L in cfg.contexts for s in cfg.test_systems for inp in cfg.input_types]
+    if args.add_methods:
+        add_methods(args.add_methods, methods, w, cfg, run, cells)
+        write_summary(run, cfg)
+        return
     done = run.done_keys() if args.resume else set()
     todo = [c for c in cells if cell_key(c[0].key, c[1], c[2]) not in done]
     log.info("eval cells: %d total, %d to run; methods %s", len(cells), len(todo), list(methods))

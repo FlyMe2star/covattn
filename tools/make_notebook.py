@@ -23,7 +23,9 @@ cells = [
              "%cd /content/covattn\n"
              "!git log --oneline -3"),
     ("code", "# 3. install pinned dependencies (keeps Colab's own CUDA torch)\n"
-             "!pip install -q -r requirements.txt && pip install -q -e . --no-deps"),
+             "!pip install -q -r requirements.txt && pip install -q -e . --no-deps\n"
+             "# Colab ships torchao 0.10, which peft 0.21 rejects when it builds LoRA layers; nothing here needs torchao\n"
+             "!pip uninstall -y -q torchao"),
     ("code", "# 4. GPU check\n!nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv\n"
              "!python -c \"import torch, chronos; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), "
              "torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-', '| chronos', chronos.__version__)\""),
@@ -61,6 +63,13 @@ cells = [
              "!grep -E 'FAILED|crashed|Traceback' $RESULTS_DIR/exp3/v2/log.txt; ls $RESULTS_DIR/exp3/v2"),
     ("code", "!python scripts/exp4_real_and_univariate.py --resume --run-name v2 --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'"),
     ("code", "!head -80 $RESULTS_DIR/reports/exp3_summary_v2.md; cat $RESULTS_DIR/reports/exp4_summary_v2.md"),
+    ("md", "LoRA for run `v2` (it failed there on Colab's torchao 0.10; fixed in cell 3). This trains LoRA only "
+           "(full FT and the other methods are reused), adds it to the 152 finished cells with the same samples, "
+           "then re-runs Exp4 as `v2l` (Exp4 is only a few minutes)."),
+    ("code", "!python scripts/exp3_repair.py --resume --run-name v2 --add-methods ft_lora 2>&1 | grep -v -E 'Loading weights|Writing model|UserWarning|FutureWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'FAILED|crashed|Traceback|added' $RESULTS_DIR/exp3/v2/log.txt | tail -5"),
+    ("code", "!python scripts/exp4_real_and_univariate.py --resume --run-name v2l --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'\n"
+             "!head -40 $RESULTS_DIR/reports/exp3_summary_v2.md; cat $RESULTS_DIR/reports/exp4_summary_v2l.md"),
     ("md", "## Later stages (cells added as they are implemented)"),
 ]
 
