@@ -1,4 +1,4 @@
-"""Tables 1-4 (LaTeX, booktabs) from the saved result files only.
+"""Tables 1-8 (LaTeX, booktabs) from the saved result files only.
 
 Re-runs each experiment's `--summary-only` (no model is loaded; the numbers are recomputed from
 metrics.jsonl / cell files) and copies the produced tables to canonical names with a source line:
@@ -6,8 +6,13 @@ metrics.jsonl / cell files) and copies the produced tables to canonical names wi
   reports/tables/table2_real_cov.tex    <- Exp4 run          (EPF MASE/WQL, shuffled / no-covariate changes)
   reports/tables/table3_univariate.tex  <- Exp4 run          (univariate MASE/WQL)
   reports/tables/table4_ablations.tex   <- Exp5 run          (optional)
+  reports/tables/table5_fev.tex         <- Exp6 run          (fev-bench covariate tasks; optional)
+  reports/tables/table6_semisynth.tex   <- Exp6 run          (semi-synthetic EPF; optional)
+  reports/tables/table7_seeds.tex       <- Exp7 run          (seed robustness; optional)
+  reports/tables/table8_other_models.tex <- Exp8 run         (other TSFMs; optional)
 
   python scripts/make_tables.py --exp3-run v2 --exp4-run v2lora --exp5-run main
+  (Exp6/7/8 use --exp6-run / --exp7-run / --exp8-run, default main)
 """
 
 from __future__ import annotations
@@ -48,6 +53,9 @@ def main() -> None:
     p.add_argument("--exp4-run", default="v2lora")
     p.add_argument("--exp4-exp3-run", default=None, help="Exp3 run the Exp4 run was built on (default: --exp3-run)")
     p.add_argument("--exp5-run", default="main")
+    p.add_argument("--exp6-run", default="main")
+    p.add_argument("--exp7-run", default="main")
+    p.add_argument("--exp8-run", default="main")
     a = p.parse_args()
     setup_logging()
     root = results_root()
@@ -63,6 +71,16 @@ def main() -> None:
             copy(t / f"table4_ablations_{a.exp5_run}.tex", t / "table4_ablations.tex", f"exp5/{a.exp5_run}")
     else:
         log.info("no Exp5 run %s yet - table 4 skipped", a.exp5_run)
+    optional = [("exp6", a.exp6_run, "exp6_real_world.py", ["table5_fev", "table6_semisynth"]),
+                ("exp7", a.exp7_run, "exp7_seeds.py", ["table7_seeds"]),
+                ("exp8", a.exp8_run, "exp8_other_models.py", ["table8_other_models"])]
+    for exp, run, script, names in optional:
+        if not (root / exp / run / "metrics.jsonl").exists():
+            log.info("no %s run %s yet - %s skipped", exp, run, ", ".join(names))
+            continue
+        if summary(script, "--run-name", run, "--exp3-run", a.exp3_run):
+            for n in names:
+                copy(t / f"{n}_{run}.tex", t / f"{n}.tex", f"{exp}/{run}")
 
 
 if __name__ == "__main__":

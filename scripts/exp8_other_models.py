@@ -23,7 +23,8 @@ import torch
 from covattn import metrics as M
 from covattn.io_utils import RunDir, fmt_seconds, results_root, setup_logging
 from covattn.model import CovBatch
-from covattn.systems import SampleSpec, default_systems, make_counterfactual, make_rng, make_sample, quick_systems
+from covattn.systems import (SampleSpec, default_systems, delta_u, make_counterfactual, make_rng, make_sample,
+                             quick_systems)
 
 log = logging.getLogger("exp8")
 LABEL = {"chronos2": "Chronos-2", "timesfm3": "TimesFM 3.0", "timesfm25_xreg": "TimesFM 2.5 + XReg",
@@ -55,6 +56,7 @@ def parse_args():
     p.add_argument("--resume", action="store_true")
     p.add_argument("--run-name", default=None)
     p.add_argument("--models", nargs="+", default=None)
+    p.add_argument("--exp3-run", default=None, help="Exp3 run the ARX column is read from (default v2)")
     p.add_argument("--device", default="auto")
     p.add_argument("--summary-only", action="store_true")
     a = p.parse_args()
@@ -66,6 +68,8 @@ def parse_args():
         cfg.run_name = a.run_name
     if a.models is not None:
         cfg.models = a.models
+    if a.exp3_run is not None:
+        cfg.exp3_run = a.exp3_run
     return cfg, a
 
 
@@ -174,6 +178,29 @@ def write_summary(run: RunDir, cfg: Exp8Config) -> None:
         lines.append(f"| {gname} | " + " | ".join(row) + " |")
         tex.append(f"{gname.replace('_', ' ')} & " + " & ".join(trow) + " \\\\")
     tex += ["\\bottomrule", "\\end{tabular}"]
+    # Memoryless check: a response that is a scaled copy of the covariate change cannot carry dynamics.
+    # pulse: corr over the horizon between e_hat and du (du is non-constant); step: du is constant, so a
+    # memoryless response is constant too and its shape r vs the effect is undefined (float noise only).
+    lines += ["", "## Memoryless check", "",
+              "Per model: median corr(e_hat, du) over the horizon for the pulse; share of step pairs whose e_hat is "
+              "constant over the horizon (std < 1e-3 x max|e_hat|; shape r is then undefined and only reflects "
+              "float noise); median shape r on pulse pairs only.", "",
+              "| model | corr(e_hat, du), pulse | step e_hat constant | shape r, pulse only |", "|---|---|---|---|"]
+    du_p = delta_u("pulse", cfg.horizon, 1.0)
+    for m in models:
+        cs = [c for c in cells if c["model"] == m]
+        cp, rp, const = [], [], []
+        for c in cs:
+            k = c["keep_pulse"]
+            eh = c["ehat_pulse"][k]
+            cp.append(M.shape_corr(eh, np.broadcast_to(du_p, eh.shape)))
+            rp.append(M.shape_corr(eh, c["e_pulse"][k]))
+            if "step" in cfg.shapes:
+                es = c["ehat_step"][c["keep_step"]]
+                const.append(es.std(-1) < 1e-3 * np.maximum(np.abs(es).max(-1), 1e-12))
+        cp, rp = np.concatenate(cp), np.concatenate(rp)
+        cs_frac = f"{np.concatenate(const).mean():.3f}" if const else "-"
+        lines.append(f"| {LABEL.get(m, m)} | {np.nanmedian(cp):.3f} | {cs_frac} | {np.nanmedian(rp):.2f} |")
     rep = results_root() / "reports"
     (rep / "tables").mkdir(parents=True, exist_ok=True)
     (rep / "tables" / f"table8_other_models_{cfg.run_name}.tex").write_text("\n".join(tex) + "\n", encoding="utf-8")
