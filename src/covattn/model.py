@@ -247,17 +247,21 @@ class Chronos2Wrapper:
         return reps * n_tasks / (time.perf_counter() - t0)
 
 
-# Rough ratio of A100 vs RTX 4060 (laptop) throughput for this encoder at fp32. It is only used
-# to print a second time estimate; the measured figure is always the one for the current device.
-A100_OVER_4060 = 5.0
+# fp32 Exp1-style throughput relative to the RTX 4060 Laptop. RTX4060 and L4 are measured
+# (562 vs 646 tasks/s at L=256, batch 128 rows); A100 is a rough guess until measured.
+# Only used to print estimates for the *other* devices; the current device's figure is measured.
+RELATIVE_SPEED = {"RTX4060": 1.0, "L4": 1.15, "A100": 5.0}
 
 
 def time_estimates(seconds_here: float, device: torch.device) -> dict[str, float]:
-    """Measured time on this device plus scaled guesses for RTX4060 / A100. Keys: 'here', 'RTX4060', 'A100'.
-    When the current device is neither GPU (e.g. CPU), the GPU figures are unknown (NaN)."""
-    name = torch.cuda.get_device_name(0) if device.type == "cuda" else str(device)
-    if "A100" in name:
-        return {"here": seconds_here, "A100": seconds_here, "RTX4060": seconds_here * A100_OVER_4060}
-    if "4060" in name:
-        return {"here": seconds_here, "RTX4060": seconds_here, "A100": seconds_here / A100_OVER_4060}
-    return {"here": seconds_here, "RTX4060": float("nan"), "A100": float("nan")}
+    """Measured time on this device plus scaled estimates for RTX4060 / A100 / L4. Keys: 'here' + RELATIVE_SPEED.
+    On an unknown device (e.g. CPU) the GPU figures are NaN."""
+    try:
+        name = torch.cuda.get_device_name(0) if device.type == "cuda" else str(device)
+    except (AssertionError, RuntimeError):
+        name = str(device)
+    here = next((k for k in RELATIVE_SPEED if k.replace("RTX", "") in name), None)
+    out = {"here": seconds_here}
+    for k, v in RELATIVE_SPEED.items():
+        out[k] = seconds_here * RELATIVE_SPEED[here] / v if here else float("nan")
+    return out

@@ -291,8 +291,8 @@ def main() -> None:
         log.info("throughput L=%d: %.0f tasks/s on %s", L, tps, wrapper.device)
     est_arx = len(todo) * cfg.n_per_cell * 0.03 if cfg.arx else 0.0  # ~30 ms/sample measured order
     te = time_estimates(est, wrapper.device)
-    log.info("ESTIMATED TIME (model) - measured on %s: %s | RTX4060: %s | A100: %s ; + ARX on CPU ~%s", wrapper.device, fmt_seconds(te["here"]),
-             fmt_seconds(te["RTX4060"]), fmt_seconds(te["A100"]), fmt_seconds(est_arx))
+    log.info("ESTIMATED TIME (model) - measured on %s: %s | RTX4060: %s | L4: %s | A100(guess): %s ; + ARX on CPU ~%s", wrapper.device, fmt_seconds(te["here"]),
+             fmt_seconds(te["RTX4060"]), fmt_seconds(te["L4"]), fmt_seconds(te["A100"]), fmt_seconds(est_arx))
     if args.estimate_only:
         return
 

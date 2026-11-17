@@ -2,7 +2,7 @@
   (1) loc/scale of every row come from its context only (future covariates do not enter);
   (2) future covariates are normalised with the *context* loc/scale of the same row;
   (3) token layout [ctx patches][REG][future patches] and output shape (B, Q, H).
-Writes docs/model_facts.json (consumed by docs/model_notes.md)."""
+Writes $RESULTS_DIR/verify/model_facts.json; --update-docs also refreshes the tracked docs/model_facts.json."""
 
 from __future__ import annotations
 
@@ -13,11 +13,16 @@ import math
 import numpy as np
 import torch
 
-from covattn.io_utils import REPO_ROOT, env_info
+import argparse
+
+from covattn.io_utils import REPO_ROOT, env_info, results_root
 from covattn.model import Chronos2Wrapper, CovBatch
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--update-docs", action="store_true", help="also overwrite the tracked docs/model_facts.json")
+    args = ap.parse_args()
     w = Chronos2Wrapper("amazon/chronos-2", device="auto", amp="off", batch_size=256)
     m = w.model
     cc = m.chronos_config
@@ -86,8 +91,12 @@ def main() -> None:
     q_pipe = w.predict(b, H)
     facts["pipeline_vs_forward_raw_maxabs"] = float(np.abs(q_pipe - q.cpu().numpy()).max())
 
-    out_file = REPO_ROOT / "docs" / "model_facts.json"
-    out_file.write_text(json.dumps(facts, indent=2, default=str), encoding="utf-8")
+    payload = json.dumps(facts, indent=2, default=str)
+    out_file = results_root() / "verify" / "model_facts.json"  # per-machine copy, not tracked by git
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text(payload, encoding="utf-8")
+    if args.update_docs:
+        (REPO_ROOT / "docs" / "model_facts.json").write_text(payload, encoding="utf-8")
     print(json.dumps(facts, indent=2, default=str))
 
 
