@@ -106,9 +106,13 @@ def _ql_torch(q: torch.Tensor, y: torch.Tensor, quantiles: torch.Tensor) -> torc
 
 
 # ------------------------------------------------------------------------------------ R1
-def head_ranking(exp2_run_dir: Path, L: int = 512, comp: str = "cross") -> list[tuple[int, int]]:
-    """(layer, head) sorted by pooled per-head restoration (future positions) over all Exp2 cells at L."""
+def head_ranking(exp2_run_dir: Path, L: int = 512, comp: str = "cross",
+                 systems: list[str] | None = None) -> list[tuple[int, int]]:
+    """(layer, head) sorted by pooled per-head restoration (future positions) over the Exp2 cells at L
+    (only cells of `systems` if given; cell files are named <system>_L<L>_<input>_<shape>.npz)."""
     files = sorted((exp2_run_dir / "cells").glob(f"*_L{L}_*.npz"))
+    if systems is not None:
+        files = [f for f in files if any(f.name.startswith(f"{s}_L{L}_") for s in systems)]
     if not files:
         raise FileNotFoundError(f"no Exp2 cells for L={L} in {exp2_run_dir}")
     num, den, names = None, 0.0, None

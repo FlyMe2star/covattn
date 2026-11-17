@@ -70,7 +70,14 @@ cells = [
              "!grep -E 'FAILED|crashed|Traceback|added' $RESULTS_DIR/exp3/v2/log.txt | tail -5"),
     ("code", "!python scripts/exp4_real_and_univariate.py --resume --run-name v2l --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'\n"
              "!head -40 $RESULTS_DIR/reports/exp3_summary_v2.md; cat $RESULTS_DIR/reports/exp4_summary_v2l.md"),
-    ("md", "## Later stages (cells added as they are implemented)"),
+    ("md", "## Stage 3 - Exp5 (ablations), figures, tables\n"
+           "Exp5 needs the Exp3 run `v2` (R1 ranking, k/gamma, R2 gates). About 20-30 min on L4 (rough)."),
+    ("code", "!python scripts/exp5_ablations.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|UserWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'crashed|Traceback' $RESULTS_DIR/exp5/main/log.txt | tail -3"),
+    ("code", "!python scripts/make_figures.py --exp3-run v2 --exp5-run main && "
+             "python scripts/make_tables.py --exp3-run v2 --exp4-run v2l --exp5-run main\n"
+             "!ls $RESULTS_DIR/reports/figs/fig* $RESULTS_DIR/reports/tables/table?_*.tex; "
+             "head -60 $RESULTS_DIR/reports/exp5_summary_main.md"),
 ]
 
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},
