@@ -256,10 +256,11 @@ def fig3(exp2: Path, exp3: Path, out: Path, L: int = 512) -> None:
     save(fig, out, "fig3_restoration")
     (out / "fig3_restoration_note.txt").write_text(
         f"Restoration ratio = sum<e_patch, e_cf> / sum||e_cf||^2 pooled over the {len(cells)} Exp2 cells at L={L} "
-        f"({exp2}). Panel (a) shows target future positions; outlined = the {n_out} heads R1 amplifies ({r1f}). The "
-        "R1 ranking pools future AND context per-head restoration (rank = larger of the two), so a few outlined "
-        "heads are faint in this future-only map. Time attention was patched per layer only (no per-head time-attn "
-        "patches exist), so panel (b) is layer-level.\n", encoding="utf-8")
+        f"({exp2}). Panel (a) shows target future positions; outlined = the {n_out} heads R1 amplifies ({r1f}), "
+        "which are exactly the top-20 cells of this map (ranks 18-21 differ by < 0.0004, so some outlined cells "
+        "look as faint as unoutlined ones). Per-head patches exist only at future positions. Time attention was "
+        "patched per layer only (no per-head time-attn patches exist), so panel (b) is layer-level.\n",
+        encoding="utf-8")
 
 
 # ------------------------------------------------------------------------------------ figure 4
