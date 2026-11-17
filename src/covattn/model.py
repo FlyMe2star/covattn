@@ -147,6 +147,7 @@ class Chronos2Wrapper:
         self.pipeline = Chronos2Pipeline.from_pretrained(model_id, **kwargs)
         self.model = self.pipeline.model
         self.model.eval()
+        self.model.requires_grad_(False)  # inference wrapper; fine-tuning works on a copy (pipeline.fit)
         self.batch_size = batch_size  # in *series* (rows), as in the official pipeline
         self.quantiles: list[float] = list(self.pipeline.quantiles)
         self.median_idx = self.quantiles.index(0.5)
@@ -234,6 +235,25 @@ class Chronos2Wrapper:
         P = batch_or_prepared if isinstance(batch_or_prepared, Prepared) else self.prepare_hooked(batch_or_prepared)
         with autocast_ctx(self.device, self.amp):
             return self.hooked.run(P, spec)
+
+    def predict_hooked(self, batch: CovBatch, spec=None) -> np.ndarray:
+        """Hooked forward in chunks of `batch_size` rows (OOM -> halve). Returns (N, Q, H) numpy."""
+        outs: list[np.ndarray] = []
+        i = 0
+        rows_per_task = 1 + batch.k
+        while i < batch.n:
+            n_tasks = max(1, self.batch_size // rows_per_task)
+            sub = batch.slice(i, min(batch.n, i + n_tasks))
+            try:
+                q, _ = self.forward_with_hooks(sub, spec)
+            except Exception as err:  # noqa: BLE001
+                if is_oom(err) and self.batch_size > rows_per_task:
+                    self._on_oom()
+                    continue
+                raise
+            outs.append(q.detach().float().cpu().numpy())
+            i += sub.n
+        return np.concatenate(outs, axis=0)
 
     @torch.no_grad()
     def forward_raw(self, batch: CovBatch, output_attentions: bool = False):

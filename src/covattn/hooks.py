@@ -56,6 +56,7 @@ class HookSpec:
     reg_bias: torch.Tensor | None = None  # (n_layers,), added to time-attn logits (target future query -> REG)
     start_layer: int = 0
     start_hidden: torch.Tensor | None = None  # block-`start_layer` input (B, S, d); skips earlier computation
+    grad: bool = False  # enable autograd (R2 gate learning); the model weights themselves stay frozen
 
 
 @dataclass
@@ -134,10 +135,13 @@ class HookedChronos2:
                         covkey=covkey, n_ctx=n_ctx, n_fut=nop, H_out=int(inp.get("H", nop * self.P)))
 
     # ------------------------------------------------------------------ main loop
-    @torch.no_grad()
     def run(self, P: Prepared, spec: HookSpec | None = None) -> tuple[torch.Tensor, dict]:
         """Returns (target quantiles (N, Q, H) in data units, record dict)."""
         spec = spec or HookSpec()
+        with torch.set_grad_enabled(spec.grad):
+            return self._run(P, spec)
+
+    def _run(self, P: Prepared, spec: HookSpec) -> tuple[torch.Tensor, dict]:
         rec: dict = {k: {} for k in spec.record}
         if spec.start_hidden is not None:
             h, l0 = spec.start_hidden, spec.start_layer
@@ -156,7 +160,6 @@ class HookedChronos2:
         q = self.decode(h[P.tgt][:, P.n_ctx + 1 :], P, final_norm=True)
         return q, rec
 
-    @torch.no_grad()
     def decode(self, fut_hidden: torch.Tensor, P: Prepared, final_norm: bool = True) -> torch.Tensor:
         """Output head on target future hidden states (N, n_fut, d) -> quantiles (N, Q, H) in data units.
         Applying it to intermediate residual streams gives a 'logit-lens' style readout."""
@@ -209,7 +212,7 @@ class HookedChronos2:
             return True
         if any(p.component in ("cross", "head") and p.layer == l for p in spec.patches):
             return True
-        return spec.cross_gain is not None and bool((spec.cross_gain[l] != 1.0).any())
+        return spec.cross_gain is not None and (spec.cross_gain.requires_grad or bool((spec.cross_gain[l] != 1.0).any()))
 
     def _group(self, l: int, mod, h: torch.Tensor, P: Prepared, spec: HookSpec, rec: dict) -> torch.Tensor:
         x = rearrange(h, "b t d -> t b d")
@@ -240,7 +243,7 @@ class HookedChronos2:
                 rec["head"][l] = ctx_t.clone()
             changed = False
             cur_cross = cross
-            if spec.cross_gain is not None and bool((spec.cross_gain[l] != 1.0).any()):
+            if spec.cross_gain is not None and (spec.cross_gain.requires_grad or bool((spec.cross_gain[l] != 1.0).any())):
                 fac = torch.ones(cross.shape[0], Hh, 1, 1, device=h.device, dtype=cross.dtype)
                 fac[P.pos(spec.cross_gain_positions)] = spec.cross_gain[l].to(device=h.device, dtype=cross.dtype).view(1, Hh, 1, 1)
                 cur_cross = cross * fac

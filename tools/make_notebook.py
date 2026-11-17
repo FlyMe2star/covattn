@@ -48,6 +48,15 @@ cells = [
              "!python scripts/exp2_mechanism.py --quick --resume --run-name colab_quick 2>&1 | grep -E 'ESTIMATED|done|Error|Traceback'"),
     ("code", "!python scripts/exp2_mechanism.py --resume 2>&1 | grep -v -E 'Loading weights|UserWarning|warnings.warn'"),
     ("code", "!head -120 $RESULTS_DIR/reports/exp2_summary_main.md"),
+    ("md", "## Stage 2 - Exp3 (repairs vs baselines, synthetic test) and Exp4 (real covariate + univariate)\n"
+           "Exp3 runs: R1 selection on val -> dither selection -> R2 gate learning -> full FT + LoRA (official "
+           "`fit`) -> test evaluation (152 cells). Each stage is resumable. Exp4 reuses the Exp3 artefacts."),
+    ("code", "!python -m pytest -q tests/test_repair.py\n"
+             "!python scripts/exp3_repair.py --quick --resume 2>&1 | grep -E 'ESTIMATED|chosen|done|Error|Traceback'\n"
+             "!python scripts/exp4_real_and_univariate.py --quick --resume 2>&1 | grep -E 'done|Error|Traceback'"),
+    ("code", "!python scripts/exp3_repair.py --resume 2>&1 | grep -v -E 'Loading weights|Writing model|UserWarning|FutureWarning|warnings.warn|it/s]'"),
+    ("code", "!python scripts/exp4_real_and_univariate.py --resume 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'"),
+    ("code", "!cat $RESULTS_DIR/reports/exp3_summary_main.md | head -80; cat $RESULTS_DIR/reports/exp4_summary_main.md"),
     ("md", "## Later stages (cells added as they are implemented)"),
 ]
 
