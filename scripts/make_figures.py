@@ -296,7 +296,7 @@ def fig5(exp3: Path, exp5: Path | None, out: Path) -> None:
         ax.axvline(1.0, color=C["ink2"], linestyle="--", linewidth=0.6)
         ax.set_xlabel("median $g$ (test, L=512)")
         ax.set_title("(b) which heads get the gain", loc="left")
-        ax.legend(loc="lower right", fontsize=5.5)
+        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2, fontsize=5.5)
         ax.grid(axis="y", visible=False)
     fig.tight_layout(w_pad=0.8)
     save(fig, out, "fig5_ablations")

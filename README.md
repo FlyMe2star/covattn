@@ -96,3 +96,11 @@ Tables (`reports/tables/`): table1_synthetic, table2_real_cov, table3_univariate
 Every script has `--quick` (minutes, CPU is fine) and `--summary-only` (rebuild reports from saved arrays).
 Train / val / test are disjoint seed streams (`systems.make_rng`). Exp2 and all selection use val; reports
 are generated only from result files.
+
+## Numerical precision note
+
+All forward passes are fp32, except that in `exp3/v2` the test evaluation (all methods, including
+zero-shot and the LoRA cells added later) ran in TF32: the official `Chronos2Pipeline.fit` leaves
+`torch.backends.cuda.matmul.fp32_precision` at TF32 after fine-tuning (verified locally). Exp5 re-evaluates
+the same samples in fp32: element-wise differences up to 9e-3 on effects of size ~4, pooled median g equal
+to 3 decimals. `baselines.finetune` now restores IEEE fp32 after `fit`.

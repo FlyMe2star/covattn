@@ -117,12 +117,21 @@ def finetune(w, mode: str, train_inputs: list[dict], out_dir, prediction_length:
     torch.manual_seed(seed)
     np.random.seed(seed)  # Chronos2Dataset samples windows with the global numpy RNG
     kw = {"lora_config": dict(LORA_CONFIG)} if mode == "lora" else {}
-    ft = w.pipeline.fit(
-        train_inputs, prediction_length=prediction_length, finetune_mode=mode, context_length=context_length,
-        learning_rate=learning_rate, num_steps=num_steps, batch_size=batch_size // grad_accum,
-        gradient_accumulation_steps=grad_accum, output_dir=out_dir / "trainer",
-        remove_printer_callback=True, seed=seed, data_seed=seed, logging_steps=50, **kw,
-    )
+    # `fit` turns TF32 on for sm>=80 and (chronos 2.3.2 + torch 2.11, verified on an RTX 4060) leaves
+    # fp32_precision at "tf32" afterwards, so every later fp32 forward pass in the process would run in
+    # TF32. Save and restore the precision flags here (new API only; torch forbids mixing the two).
+    prec = (torch.backends.cuda.matmul.fp32_precision, torch.backends.cudnn.fp32_precision)
+    try:
+        ft = w.pipeline.fit(
+            train_inputs, prediction_length=prediction_length, finetune_mode=mode, context_length=context_length,
+            learning_rate=learning_rate, num_steps=num_steps, batch_size=batch_size // grad_accum,
+            gradient_accumulation_steps=grad_accum, output_dir=out_dir / "trainer",
+            remove_printer_callback=True, seed=seed, data_seed=seed, logging_steps=50, **kw,
+        )
+    finally:
+        # "none" defers to the legacy flag, which the trainer set to TF32 -> restore an explicit "ieee"
+        torch.backends.cuda.matmul.fp32_precision, torch.backends.cudnn.fp32_precision = (
+            "ieee" if p == "none" else p for p in prec)
     m = ft.model
     n_total = sum(p.numel() for p in m.parameters())
     n_train = sum(p.numel() for p in m.parameters() if p.requires_grad)
