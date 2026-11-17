@@ -7,7 +7,7 @@ metrics.jsonl / cell files) and copies the produced tables to canonical names wi
   reports/tables/table3_univariate.tex  <- Exp4 run          (univariate MASE/WQL)
   reports/tables/table4_ablations.tex   <- Exp5 run          (optional)
 
-  python scripts/make_tables.py --exp3-run v2 --exp4-run v2l --exp5-run main
+  python scripts/make_tables.py --exp3-run v2 --exp4-run v2lora --exp5-run main
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def copy(src: Path, dst: Path, source_note: str) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exp3-run", default="v2")
-    p.add_argument("--exp4-run", default="v2l")
+    p.add_argument("--exp4-run", default="v2lora")
     p.add_argument("--exp4-exp3-run", default=None, help="Exp3 run the Exp4 run was built on (default: --exp3-run)")
     p.add_argument("--exp5-run", default="main")
     a = p.parse_args()
