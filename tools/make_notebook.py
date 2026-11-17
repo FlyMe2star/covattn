@@ -36,11 +36,10 @@ cells = [
     ("code", "!python -m pytest -q\n!python scripts/verify_model.py > /dev/null && echo verify_model OK\n"
              "!python scripts/exp1_phenomenon.py --quick --resume --run-name colab_quick 2>&1 | grep -E 'ESTIMATED|done|Error|Traceback'"),
     ("md", "## Stage 0 - Exp1 (phenomenon)\n"
-           "The canonical Exp1 run was done locally (`exp1/main`). Optional: upload `exp1_results.zip` to "
-           "`MyDrive/pakdd27/` and unpack it here so later stages / figures can read it."),
-    ("code", "!test -f /content/drive/MyDrive/pakdd27/exp1_results.zip && unzip -q -n "
-             "/content/drive/MyDrive/pakdd27/exp1_results.zip -d $RESULTS_DIR && echo unpacked || echo 'no zip uploaded'"),
-    ("code", "# re-run / complete Exp1 on this GPU (resumable). About 2-3 min model + ~10 min ARX on Colab CPU\n"
+           "The canonical run `exp1/main` (304 cells) is already on Drive; this cell only checks it."),
+    ("code", "!ls $RESULTS_DIR/exp1/main && echo \"cells: $(ls $RESULTS_DIR/exp1/main/cells | wc -l)\"\n"
+             "!python scripts/exp1_phenomenon.py --summary-only && head -30 $RESULTS_DIR/reports/exp1_summary_main.md"),
+    ("code", "# complete / re-run Exp1 on this GPU (resumable; skips finished cells)\n"
              "# !python scripts/exp1_phenomenon.py --resume --batch-size 256"),
     ("md", "## Later stages (cells added as they are implemented)"),
 ]
