@@ -84,14 +84,16 @@ class Exp3Config:
     dither_sigma: list[float] = field(default_factory=lambda: [0.1, 0.3, 0.5])
     dither_K: int = 8
     # R2
-    r2_steps: int = 300
-    r2_lr: float = 0.02
-    r2_pairs: int = 16
+    r2_steps: int = 400
+    r2_lr: float = 0.01
+    r2_pairs: int = 32
+    r2_reg: float = 0.05
     # fine-tuning baselines (official fit; same data and steps for both)
     ft_series_per_combo: int = 64
     ft_series_length: int = 2048
     ft_steps: int = 1000
-    ft_batch_rows: int = 256
+    ft_batch_rows: int = 256  # effective rows per step
+    ft_grad_accum: int = 4  # micro-batch = 64 rows (the first L4 run died at the start of full FT, suspected OOM)
     ft_lr_full: float = 1e-5
     ft_lr_lora: float = 1e-4
     seed: int = 0
@@ -126,6 +128,7 @@ def parse_args() -> tuple[Exp3Config, argparse.Namespace]:
         cfg.dither_sigma, cfg.dither_K = [0.3], 2
         cfg.r2_steps, cfg.r2_pairs = 3, 4
         cfg.ft_series_per_combo, cfg.ft_series_length, cfg.ft_steps, cfg.ft_batch_rows = 4, 512, 2, 16
+        cfg.ft_grad_accum = 2
         cfg.exp2_run = "quick"
         cfg.rank_context = 256
     if a.run_name is not None:
@@ -209,7 +212,8 @@ def stage_r2(w, cfg: Exp3Config, run: RunDir) -> torch.Tensor:
             log.info("R2 step %d: %s", m["step"], {k: round(v, 4) for k, v in m.items() if k != "step"})
 
     t0 = time.time()
-    gates = train_r2(w, R2Config(steps=cfg.r2_steps, lr=cfg.r2_lr, pairs_per_step=cfg.r2_pairs, lam=cfg.lam),
+    gates = train_r2(w, R2Config(steps=cfg.r2_steps, lr=cfg.r2_lr, pairs_per_step=cfg.r2_pairs, lam=cfg.lam,
+                                 reg=cfg.r2_reg),
                      batch_fn, run.path / "r2_ckpt.pt", cb)
     done.write_text(json.dumps({"gates": gates.tolist(), "train_seconds": time.time() - t0}))
     return gates
@@ -242,8 +246,14 @@ def stage_ft(w, cfg: Exp3Config, run: RunDir) -> dict:
         data = data or ft_inputs(cfg)
         t0 = time.time()
         log.info("fine-tuning (%s): %d series, %d steps", mode, len(data), cfg.ft_steps)
-        info = finetune(w, mode, data, d, cfg.horizon, max(cfg.train_contexts), lr, cfg.ft_steps, cfg.ft_batch_rows,
-                        cfg.seed)
+        try:
+            info = finetune(w, mode, data, d, cfg.horizon, max(cfg.train_contexts), lr, cfg.ft_steps,
+                            cfg.ft_batch_rows, cfg.seed, grad_accum=cfg.ft_grad_accum)
+        except Exception:  # noqa: BLE001 - keep the rest of Exp3 alive; the method is then missing from the tables
+            log.exception("fine-tuning (%s) FAILED - continuing without it", mode)
+            if w.device.type == "cuda":
+                torch.cuda.empty_cache()
+            continue
         info["train_seconds"] = time.time() - t0
         info["n_series"] = len(data)
         f.write_text(json.dumps(info, indent=1))
@@ -469,4 +479,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:  # noqa: BLE001 - make sure the traceback reaches log.txt on Drive
+        log.exception("Exp3 crashed")
+        raise

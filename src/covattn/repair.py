@@ -5,7 +5,8 @@ R1 (training-free): multiply the cross part (sum over covariate keys of A * v, t
     restoration ratio (val split); k and gamma are chosen on synthetic val.
 R2 (gate learning): one scalar gate per (layer, head) on the same cross part, initialised to 1
     (= original model). All model weights stay frozen; 144 trainable parameters.
-    Loss = effect matching on counterfactual pairs + lambda * quantile loss on the factual forecast.
+    Loss = effect matching on counterfactual pairs + lambda * quantile loss on the factual forecast
+    + reg * mean (gate - 1)^2.
 
 Constructive guarantee: with no covariate in the group the cross part is identically zero, so R1/R2
 leave a univariate forecast unchanged (tests/test_repair.py).
@@ -153,6 +154,7 @@ class R2Config:
     lam: float = 1.0
     ckpt_every: int = 50
     clamp_min: float = 0.0
+    reg: float = 0.0  # weight of mean (gate - 1)^2
 
 
 def train_r2(w, cfg: R2Config, batch_fn, ckpt_path: Path, metrics_cb=None) -> torch.Tensor:
@@ -185,7 +187,7 @@ def train_r2(w, cfg: R2Config, batch_fn, ckpt_path: Path, metrics_cb=None) -> to
         eff_l = eff[keep].mean() if bool(keep.any()) else torch.zeros((), device=dev)
         scale = torch.as_tensor(pb.y_ctx.std(-1), device=dev, dtype=torch.float32).clamp_min(1e-6)
         ql = (_ql_torch(q_fac, torch.as_tensor(pb.y_true, device=dev, dtype=torch.float32), qs) / scale).mean()
-        loss = eff_l + cfg.lam * ql
+        loss = eff_l + cfg.lam * ql + cfg.reg * ((gates - 1.0) ** 2).mean()
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()

@@ -102,9 +102,10 @@ LORA_CONFIG = {"r": 8, "lora_alpha": 16, "lora_dropout": 0.0, "target_modules": 
 
 
 def finetune(w, mode: str, train_inputs: list[dict], out_dir, prediction_length: int, context_length: int,
-             learning_rate: float, num_steps: int, batch_size: int, seed: int) -> dict:
+             learning_rate: float, num_steps: int, batch_size: int, seed: int, grad_accum: int = 1) -> dict:
     """Fine-tune a copy of the model with the official `Chronos2Pipeline.fit` (mode: full | lora).
     LoRA: rank 8 on the attention q / v projections (time and group attention), merged after training.
+    batch_size = effective rows per optimizer step, split into grad_accum micro-batches.
     Saves the model to out_dir/model and returns {path, trainable_params, total_params}."""
     from pathlib import Path
 
@@ -118,7 +119,8 @@ def finetune(w, mode: str, train_inputs: list[dict], out_dir, prediction_length:
     kw = {"lora_config": dict(LORA_CONFIG)} if mode == "lora" else {}
     ft = w.pipeline.fit(
         train_inputs, prediction_length=prediction_length, finetune_mode=mode, context_length=context_length,
-        learning_rate=learning_rate, num_steps=num_steps, batch_size=batch_size, output_dir=out_dir / "trainer",
+        learning_rate=learning_rate, num_steps=num_steps, batch_size=batch_size // grad_accum,
+        gradient_accumulation_steps=grad_accum, output_dir=out_dir / "trainer",
         remove_printer_callback=True, seed=seed, data_seed=seed, logging_steps=50, **kw,
     )
     m = ft.model

@@ -54,9 +54,13 @@ cells = [
     ("code", "!python -m pytest -q tests/test_repair.py\n"
              "!python scripts/exp3_repair.py --quick --resume 2>&1 | grep -E 'ESTIMATED|chosen|done|Error|Traceback'\n"
              "!python scripts/exp4_real_and_univariate.py --quick --resume 2>&1 | grep -E 'done|Error|Traceback'"),
-    ("code", "!python scripts/exp3_repair.py --resume 2>&1 | grep -v -E 'Loading weights|Writing model|UserWarning|FutureWarning|warnings.warn|it/s]'"),
-    ("code", "!python scripts/exp4_real_and_univariate.py --resume 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'"),
-    ("code", "!cat $RESULTS_DIR/reports/exp3_summary_main.md | head -80; cat $RESULTS_DIR/reports/exp4_summary_main.md"),
+    ("md", "Run `v2` (current): R2 with 32 pairs/step, lr 0.01, 400 steps, pull towards 1; fine-tuning in 64-row "
+           "micro-batches x 4 (the first run `main` stopped at the start of full FT, suspected OOM). "
+           "A fine-tuning failure is now logged to log.txt and the rest continues."),
+    ("code", "!python scripts/exp3_repair.py --resume --run-name v2 2>&1 | grep -v -E 'Loading weights|Writing model|UserWarning|FutureWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'FAILED|crashed|Traceback' $RESULTS_DIR/exp3/v2/log.txt; ls $RESULTS_DIR/exp3/v2"),
+    ("code", "!python scripts/exp4_real_and_univariate.py --resume --run-name v2 --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'"),
+    ("code", "!head -80 $RESULTS_DIR/reports/exp3_summary_v2.md; cat $RESULTS_DIR/reports/exp4_summary_v2.md"),
     ("md", "## Later stages (cells added as they are implemented)"),
 ]
 
