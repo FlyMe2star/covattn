@@ -56,3 +56,18 @@ def test_hammerstein_nonlinear_effect_runs() -> None:
     e1 = make_counterfactual(s, "step", 1.0).effect
     e2 = make_counterfactual(s, "step", 2.0).effect
     assert not np.allclose(2 * e1, e2)  # tanh makes the response nonlinear in delta
+
+
+def test_mix_input_interpolates_regimes() -> None:
+    from covattn.systems import gen_input, make_rng
+
+    for a in (0.0, 0.5, 1.0):
+        u = gen_input(f"mix{a:g}", 1024, make_rng(0, "test", "mix", a))
+        assert abs(u.mean()) < 1e-9 and abs(u.std() - 1.0) < 1e-9
+    # a = 1 is exactly the multisine drawn from the same stream; a = 0 is a PRBS (two levels only)
+    m1 = gen_input("mix1", 1024, make_rng(0, "test", "mix", 9))
+    ms = gen_input("multisine", 1024, make_rng(0, "test", "mix", 9))
+    assert np.allclose(m1, ms)
+    assert len(np.unique(np.round(gen_input("mix0", 1024, make_rng(0, "test", "mix", 0)), 9))) == 2
+    with pytest.raises(ValueError):
+        gen_input("mix1.5", 64, make_rng(0, "test", "mix", 2))

@@ -118,6 +118,14 @@ def make_rng(base_seed: int, split: str, *keys: str | int) -> np.random.Generato
 # input signals
 # --------------------------------------------------------------------------------------
 def gen_input(kind: InputType, T: int, rng: np.random.Generator) -> np.ndarray:
+    if kind.startswith("mix"):
+        # "mix<a>": a * multisine + (1 - a) * PRBS (each standardised), interpolating between the two regimes (Exp9)
+        a = float(kind[3:])
+        if not 0.0 <= a <= 1.0:
+            raise ValueError(f"mixing weight out of [0, 1]: {kind}")
+        u = a * gen_input("multisine", T, rng) + (1.0 - a) * gen_input("prbs", T, rng)
+        sd = u.std()
+        return (u - u.mean()) / (sd if sd > 0 else 1.0)
     if kind == "prbs":
         hold = rng.uniform(4, 24)  # mean hold length
         switches = rng.random(T) < 1.0 / hold

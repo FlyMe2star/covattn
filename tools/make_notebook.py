@@ -89,6 +89,16 @@ cells = [
              "!grep -E 'FAILED|crashed|skipped' $RESULTS_DIR/exp8/main/log.txt | tail -5; cat $RESULTS_DIR/reports/exp8_summary_main.md"),
     ("code", "!python scripts/exp7_seeds.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|UserWarning|warnings.warn|it/s]'\n"
              "!grep -E 'crashed' $RESULTS_DIR/exp7/main/log.txt | tail -3; head -30 $RESULTS_DIR/reports/exp7_summary_main.md"),
+    ("md", "## Stage 5 - multisine diagnosis, semi-synthetic on all fev tasks, cost\n"
+           "Re-run cell 2 first to pull the new scripts. Rough A100 times: Exp9 ~20-30 min (190 cells), Exp10 ~30-60 min "
+           "(28 tasks x 3 systems x 2 effect sizes, incl. data download and the fine-tuned models), Exp11 ~5 min."),
+    ("code", "!python scripts/exp9_multisine.py --quick --resume 2>&1 | grep -E 'cells to run|summary|Error|Traceback'\n"
+             "!python scripts/exp9_multisine.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]'\n"
+             "!grep -E 'FAILED|crashed' $RESULTS_DIR/exp9/main/log.txt | tail -5; cat $RESULTS_DIR/reports/exp9_summary_main.md"),
+    ("code", "!python scripts/exp10_semisynth_fev.py --resume --exp3-run v2 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]|symlinks'\n"
+             "!grep -E 'FAILED|crashed|skipped' $RESULTS_DIR/exp10/main/log.txt | tail -8; head -60 $RESULTS_DIR/reports/exp10_summary_main.md"),
+    ("code", "!python scripts/exp11_cost.py --exp3-run v2 2>&1 | grep -E 'exp11:|Error|Traceback'\n"
+             "!cat $RESULTS_DIR/reports/exp11_summary_main.md"),
 ]
 
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},
