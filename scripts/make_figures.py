@@ -99,6 +99,79 @@ def _clip_marks(ax, bp, col) -> None:
             ax.plot([x], [lo - 0.03 * (hi - lo)], marker="v", markersize=2.6, color=col, clip_on=False, zorder=4)
 
 
+# ------------------------------------------------------------------------------------ figure 0 (schematic)
+def fig0(out: Path) -> None:
+    """Overview: token layout of one target + one covariate row, the covariate pathway located by Exp2 (layer
+    numbers from the Exp2 patching summary), and where R1/R2 act. A drawing, no data."""
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
+
+    fig, ax = plt.subplots(figsize=(LNCS_W, 2.1))
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 44)
+    ax.axis("off")
+    w, h, gap = 4.6, 4.6, 0.7
+    y_cov, y_tgt = 27.0, 10.0
+    x0 = 13.0
+    xs_ctx = [x0 + i * (w + gap) for i in range(4)]
+    x_reg = xs_ctx[-1] + w + gap + 0.5
+    xs_fut = [x_reg + w + gap + 0.5 + i * (w + gap) for i in range(3)]
+    x_end = xs_fut[-1] + w
+    fs = MIN_PT + 0.5
+    ink2, blue = C["ink2"], C["blue"]
+
+    def box(x, y, face, edge=ink2, hatch=None, lw=0.6):
+        ax.add_patch(Rectangle((x, y), w, h, facecolor=face, edgecolor=edge, linewidth=lw, hatch=hatch))
+
+    for x in xs_ctx:
+        box(x, y_cov, "#dbe8f8"); box(x, y_tgt, "#e9e8e4")
+    box(x_reg, y_cov, "white", hatch="////"); box(x_reg, y_tgt, "white", hatch="////")
+    for x in xs_fut:
+        box(x, y_cov, "#fbd9c9", edge=C["orange"], lw=0.9)  # known future covariate (changed by du)
+        box(x, y_tgt, "white")  # target future: masked, no values
+    ax.text(x0 - 1.0, y_cov + h / 2, "covariate", ha="right", va="center", fontsize=fs)
+    ax.text(x0 - 1.0, y_tgt + h / 2, "target", ha="right", va="center", fontsize=fs)
+    # column headers
+    yh = y_cov + h + 1.2
+    ax.text((xs_ctx[0] + xs_ctx[-1] + w) / 2, yh, "context", ha="center", va="bottom", fontsize=fs)
+    ax.text(x_reg + w / 2, yh, "REG", ha="center", va="bottom", fontsize=fs)
+    ax.text((xs_fut[0] + x_end) / 2, yh, r"future: $u{+}\Delta u$", ha="center", va="bottom", fontsize=fs,
+            color=C["orange"])
+    ax.text(xs_fut[2] + w / 2, y_tgt - 1.2, "masked", ha="center", va="top", fontsize=fs)
+
+    def arrow(p0, p1, col, rad=0.0, lw=1.0):
+        ax.add_patch(FancyArrowPatch(p0, p1, connectionstyle=f"arc3,rad={rad}", arrowstyle="-|>", mutation_scale=6,
+                                     color=col, linewidth=lw, shrinkA=1, shrinkB=1))
+
+    # (1) bidirectional time attention: the covariate's context tokens see its changed future
+    arrow((xs_fut[0] + w / 2, yh + 3.4), (xs_ctx[3] + w / 2, yh + 3.4), ink2, rad=0.5, lw=0.8)
+    ax.text((xs_ctx[3] + xs_fut[0] + w) / 2, yh + 7.6, "time attention (bidirectional)", ha="center", va="bottom",
+            fontsize=MIN_PT, color=ink2)
+    # (2) group attention: covariate -> target, at context (layer 9) and future positions (cross term, layers 7-11)
+    arrow((xs_ctx[3] + w / 2, y_cov), (xs_ctx[3] + w / 2, y_tgt + h), blue, lw=1.3)
+    arrow((xs_fut[0] + w / 2, y_cov), (xs_fut[0] + w / 2, y_tgt + h), blue, lw=1.3)
+    ym = (y_cov + y_tgt + h) / 2
+    ax.text(xs_ctx[3] - 0.6, ym, "group attn.\nlayer 9", ha="right", va="center", fontsize=MIN_PT, color=blue)
+    ax.text(xs_fut[0] + w / 2 + 1.0, ym, "cross term $c_{l,h}$\nlayers 7–11", ha="left", va="center",
+            fontsize=MIN_PT, color=blue)
+    # (3) late time attention + MLP move the effect onto the target's future tokens
+    arrow((xs_ctx[3] + w / 2, y_tgt - 0.3), (xs_fut[0] + w / 2, y_tgt - 0.3), ink2, rad=0.5, lw=0.8)
+    ax.text((xs_ctx[0] + xs_ctx[-1] + w) / 2, y_tgt - 5.8, "time attn. layers 10–11,\nMLP layer 11", ha="center",
+            va="top", fontsize=MIN_PT, color=ink2)
+    # repair panel
+    bx = x_end + 13.0
+    ax.add_patch(FancyBboxPatch((bx, 4.0), 99.4 - bx, 34.0, boxstyle="round,pad=0.3,rounding_size=1.2",
+                                facecolor="#eef7f2", edgecolor=C["aqua"], linewidth=0.8))
+    tx = bx + 1.2
+    ax.text(tx, 36.4, "Repair R1 / R2", fontsize=fs, fontweight="bold", va="top", color="#126b4b")
+    ax.text(tx, 31.0, "target queries only:", fontsize=MIN_PT, va="top")
+    ax.text(tx, 26.4, "$o_{l,h} \\leftarrow o_{l,h} + (\\gamma_{l,h}-1)\\,c_{l,h}$", fontsize=MIN_PT + 0.5, va="top")
+    ax.text(tx, 20.4, "R1: $\\gamma$ = 2.5 on 20 heads\nR2: 144 learned gates",
+            fontsize=MIN_PT, va="top", linespacing=1.3)
+    ax.text(tx, 11.4, "no covariate $\\Rightarrow c_{l,h}\\equiv 0$\n$\\Rightarrow$ forecast unchanged",
+            fontsize=MIN_PT, va="top", linespacing=1.3, color="#126b4b")
+    save(fig, out, "fig0_overview")
+
+
 # ------------------------------------------------------------------------------------ figure 1
 def fig1(exp1: Path, out: Path) -> None:
     cfg = json.loads((exp1 / "config.json").read_text())["config"]
@@ -497,16 +570,17 @@ def main() -> None:
     p.add_argument("--exp5-run", default="main")
     p.add_argument("--exp6-run", default="main")
     p.add_argument("--exp8-run", default="main")
-    p.add_argument("--only", nargs="+", default=None, choices=["1", "2", "3", "4", "5", "6", "7"])
+    p.add_argument("--only", nargs="+", default=None, choices=["0", "1", "2", "3", "4", "5", "6", "7"])
     a = p.parse_args()
     setup_logging()
     logging.getLogger("fontTools").setLevel(logging.WARNING)
     style()
     root = results_root()
     out = root / "reports" / "figs"
-    only = set(a.only or "1234567")
+    only = set(a.only or "01234567")
     e3 = root / "exp3" / a.exp3_run
-    jobs = [("1", lambda: fig1(root / "exp1" / a.exp1_run, out)),
+    jobs = [("0", lambda: fig0(out)),
+            ("1", lambda: fig1(root / "exp1" / a.exp1_run, out)),
             ("2", lambda: fig2(e3, out)),
             ("3", lambda: fig3(root / "exp2" / a.exp2_run, e3, out)),
             ("4", lambda: fig4(root / "exp2" / a.exp2_run, out)),
