@@ -51,11 +51,11 @@ def test_prepare_parsing(tmp_path: Path) -> None:
     assert list(hh["id"]) == ["A", "B"] and list(hh["group"]) == ["Std", "ToU"]
     assert a[0, s("2012-10-12 00:30")] == 0.0  # first reading kept, also across files
     assert a[0, s("2012-10-12 01:00")] == 0.25  # within-file duplicate dropped
-    assert np.isnan(a[1, s("2013-01-01 00:00")])  # "Null" -> NaN (odd seconds floored to the slot)
+    assert np.isnan(a[1, s("2013-01-01 00:00")])  # off-grid "Null" reading dropped, slot stays missing
     assert a[1, s("2013-01-01 00:30")] == 0.5
     assert np.isfinite(a).sum() == 3
     log = json.loads((tmp_path / "out" / "prepare_log.json").read_text())
-    assert log["duplicate"] == 2 and log["off_grid"] == 1 and log["missing_kwh"] == 1
+    assert log["duplicate"] == 2 and log["off_grid"] == 1 and log["missing_kwh"] == 0
 
 
 def test_prepare_format_variants(tmp_path: Path) -> None:
@@ -98,6 +98,31 @@ def test_prepare_fulldata_chunked(tmp_path: Path) -> None:
     assert np.isnan(a[1, s("2013-01-01 00:00")]) and a[1, s("2013-01-01 00:30")] == 0.5
     log = json.loads((tmp_path / "out" / "prepare_log.json").read_text())
     assert log["duplicate"] == 2 and log["rows"] == 6
+
+
+def test_prepare_kaggle_layout(tmp_path: Path) -> None:
+    """Kaggle mirror: groups from informations_households.csv, blocks in numeric order, off-grid Null dropped."""
+    raw = tmp_path / "raw"
+    kd = raw / "kaggle" / "halfhourly"
+    kd.mkdir(parents=True)
+    _tariff(raw / "Tariffs.xlsx")
+    (raw / "kaggle" / "informations_households.csv").write_text(
+        "LCLid,stdorToU,Acorn,Acorn_grouped,file\nA,Std,ACORN-A,Affluent,block_2\nB,ToU,ACORN-,ACORN-,block_10\n")
+    blocks = {2: ["A,2012-10-12 00:30:00.0000000, 0.1 ", "A,2012-10-12 00:37:27.0000000,Null"],
+              10: ["B,2013-01-01 00:30:00.0000000, 0.5 "]}
+    for k, rows in blocks.items():
+        with zipfile.ZipFile(kd / f"block_{k}.zip", "w") as z:
+            z.writestr(f"block_{k}.csv", "\n".join(["LCLid,tstp,energy(kWh/hh)", *rows]) + "\n")
+    _run("lcl_prepare.py", "--raw", str(raw), "--out", str(tmp_path / "out"))
+    a = np.load(tmp_path / "out" / "hh_kwh.npy")
+    hh = pd.read_parquet(tmp_path / "out" / "households.parquet")
+    t0 = pd.Timestamp("2011-11-01")
+    s = lambda ts: int((pd.Timestamp(ts) - t0) / pd.Timedelta("30min"))  # noqa: E731
+    assert list(hh["id"]) == ["A", "B"] and list(hh["group"]) == ["Std", "ToU"]
+    assert list(hh["acorn_grouped"]) == ["Affluent", "ACORN-"]
+    assert np.isclose(a[0, s("2012-10-12 00:30")], 0.1) and np.isclose(a[1, s("2013-01-01 00:30")], 0.5)
+    log = json.loads((tmp_path / "out" / "prepare_log.json").read_text())
+    assert log["off_grid"] == 1 and log["duplicate"] == 0 and np.isfinite(a).sum() == 2
 
 
 def test_download_check_rejects_bad_files(tmp_path: Path) -> None:
@@ -147,3 +172,5 @@ def test_feasibility_recovers_known_effect(tmp_path: Path) -> None:
     assert abs(rep["event_runs"]["Low"]["rel_effect_median"] - 0.10) < 0.02
     for lv in ("High", "Low"):
         assert abs(rep["placebo_2012_schedule"][lv]["rel_effect_mean"]) < 0.02
+    for period in ("GMT", "BST"):
+        assert rep["alignment_high_runs"][period]["strongest_shift"] == 0

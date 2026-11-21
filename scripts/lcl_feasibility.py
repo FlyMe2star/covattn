@@ -40,6 +40,7 @@ from covattn.io_utils import results_root
 K_REF = 10
 MIN_COVERAGE = 0.90
 SPD = 48  # slots per day
+BST_2013 = (pd.Timestamp("2013-03-31 01:00"), pd.Timestamp("2013-10-27 01:00"))  # GMT instants
 
 
 def group_means(arr: np.ndarray, rows: np.ndarray, block: int = 400) -> np.ndarray:
@@ -92,15 +93,26 @@ def runs_of(tariff: np.ndarray) -> list[tuple[int, int, str]]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/lcl/processed")
+    ap.add_argument("--tariff-bst-shift", type=int, default=0,
+                    help="move the tariff signal by this many slots during British Summer Time 2013 "
+                         "(-2 = tariff file in local clock time, readings in GMT); chosen from the alignment table")
     args = ap.parse_args()
     data = Path(args.data)
-    out = results_root() / "lcl" / "feasibility"
+    k_bst = args.tariff_bst_shift
+    out = results_root() / "lcl" / ("feasibility" if k_bst == 0 else f"feasibility_bst{k_bst:+d}")
     out.mkdir(parents=True, exist_ok=True)
 
     hh = pd.read_parquet(data / "households.parquet")
     arr = np.load(data / "hh_kwh.npy", mmap_mode="r")
     tar = pd.read_parquet(data / "tariff.parquet")
     t = pd.DatetimeIndex(tar["t"])
+    bst = ((t >= BST_2013[0]) & (t < BST_2013[1]))
+    if k_bst:
+        old = tar["tariff"].to_numpy()
+        new = old.copy()
+        idx = np.flatnonzero(bst)
+        new[idx] = old[idx - k_bst]
+        tar["tariff"] = new
     s2013 = int(np.searchsorted(t, pd.Timestamp("2013-01-01")))
     s2012 = int(np.searchsorted(t, pd.Timestamp("2012-01-02")))  # 2013-01-01 minus 364 days
 
@@ -172,6 +184,23 @@ def main() -> None:
                     share_expected_sign=float(((df.rel_effect < 0) if df.level.iloc[0] == "High" else (df.rel_effect > 0)).mean()),
                     pooled_mean_se=float(df.null_sd.median() / np.sqrt(len(df))))
     report["event_runs"] = {lv: summ(runs[runs.level == lv]) for lv in ("High", "Low")}
+
+    # clock alignment: mean relative effect of High runs with the tariff mask moved by k slots, GMT vs BST
+    # months. With correctly aligned clocks the strongest (most negative) effect sits at k = 0 in both.
+    bst13 = bst[s2013:s2013 + 365 * SPD]
+    flat_e, flat_cf = e13.reshape(-1), cf13.reshape(-1)
+    align = {}
+    for period, sel in (("GMT", False), ("BST", True)):
+        rr = [(a, b) for a, b, lv in runs_of(tariff13) if lv == "High" and bst13[a] == sel]
+        row = {}
+        for k in range(-4, 5):
+            v = [np.nanmean(flat_e[a + k:b + k]) / np.nanmean(flat_cf[a + k:b + k])
+                 for a, b in rr if 0 <= a + k and b + k <= len(flat_e)]
+            row[k] = float(np.nanmean(v)) if v else float("nan")
+        align[period] = dict(n_runs=len(rr), mean_rel_effect_by_shift=row,
+                             strongest_shift=int(min(row, key=lambda k: row[k])))
+    report["alignment_high_runs"] = align
+    report["tariff_bst_shift_applied"] = k_bst
 
     # day-profile signal share (what the effect gain g will be computed on)
     ev_days = np.flatnonzero(is_event & np.isfinite(e13).all(1))

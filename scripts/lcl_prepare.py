@@ -39,6 +39,7 @@ MAX_HH = 6000  # dataset description: 5,567 households
 PRICE_P_PER_KWH = {"Low": 3.99, "Normal": 11.76, "High": 67.20}  # dataset description, London Datastore
 ZIP_NAMES = ("Partitioned_LCL_Data.zip", "LCL-FullData.zip")  # as saved by scripts/lcl_download.py
 CHUNK_ROWS = int(os.environ.get("LCL_CHUNK_ROWS", 1_000_000))
+KAGGLE_DIR = "kaggle"  # mirror jeanmidev/smart-meters-in-london: informations_households.csv + halfhourly/block_*.zip
 
 
 def main() -> None:
@@ -106,10 +107,21 @@ def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
                raw_group_values={})
 
     src = next((raw / n for n in ZIP_NAMES if (raw / n).exists()), None)
-    if src is None:
-        raise SystemExit(f"none of {ZIP_NAMES} in {raw}; run scripts/lcl_download.py first")
-    print(f"source: {src.name}")
-    files = list(_csv_members(src))
+    info = None
+    if src is not None:
+        print(f"source: London Datastore {src.name}")
+        files = list(_csv_members(src))
+    elif (raw / KAGGLE_DIR / "informations_households.csv").exists():
+        kd = raw / KAGGLE_DIR
+        print(f"source: Kaggle mirror {kd}")
+        info = pd.read_csv(kd / "informations_households.csv", dtype=str)
+        info.columns = [c.strip().lower() for c in info.columns]
+        info = info.set_index(info["lclid"].str.strip())
+        print(f"households in info file: {len(info)}, groups {info['stdortou'].value_counts().to_dict()}")
+        files = [f for p in sorted((kd / "halfhourly").glob("block_*.zip"), key=lambda p: int(p.stem.split('_')[1]))
+                 for f in _csv_members(p)]
+    else:
+        raise SystemExit(f"none of {ZIP_NAMES} or {KAGGLE_DIR}/ in {raw}; run scripts/lcl_download.py first")
     if not files:
         raise SystemExit("no CSV files found in the zip (see member list above)")
     print(f"{len(files)} csv files; reading in chunks of {CHUNK_ROWS} rows")
@@ -118,6 +130,14 @@ def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
             print(f"first file {name}: columns {list(df.columns)}")
             print(df.head(3).to_string())
         df.columns = [c.strip().lower() for c in df.columns]
+        df = df.rename(columns={"tstp": "datetime"})
+        if info is not None:  # Kaggle half-hourly blocks carry no group / Acorn columns
+            key = df["lclid"].str.strip()
+            missing = ~key.isin(info.index)
+            if missing.any():
+                raise SystemExit(f"{name}: {key[missing].nunique()} households not in informations_households.csv")
+            for c in ("stdortou", "acorn", "acorn_grouped"):
+                df[c] = info.loc[key, c].to_numpy()
         need = {"lclid", "stdortou", "datetime"}
         kwh_cols = [c for c in df.columns if c.startswith("kwh") or "energy" in c]
         if not need <= set(df.columns) or len(kwh_cols) != 1:
@@ -138,10 +158,15 @@ def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
         ok = t.notna().to_numpy().copy()
         log["bad_time"] += int((~ok).sum())
         tf = t.dt.floor("30min")
-        log["off_grid"] += int((tf != t)[ok].sum())
+        # off-grid stamps (e.g. 12:37:27) are meter events with "Null" kWh that collide with the regular
+        # reading of the same slot; they are dropped, not floored, so they can never replace a real value
+        off = ((tf != t) & t.notna()).to_numpy()
+        log["off_grid"] += int(off.sum())
+        ok &= ~off
         col = ((tf - GRID_START) // SLOT).to_numpy(dtype=np.float64, na_value=-1)
+        on_grid = ok.copy()
         ok &= (col >= 0) & (col < n_slots)
-        log["out_of_grid"] += int((t.notna().to_numpy() & ~ok).sum())
+        log["out_of_grid"] += int((on_grid & ~ok).sum())
         log["missing_kwh"] += int(np.isnan(kwh[ok]).sum())
 
         for hid, sub in df.loc[ok, ["lclid", "stdortou", "acorn", "acorn_grouped"]].groupby("lclid", sort=False):
