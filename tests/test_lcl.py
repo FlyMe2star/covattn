@@ -80,6 +80,43 @@ def test_prepare_format_variants(tmp_path: Path) -> None:
     assert not (tmp_path / "out" / "hh_kwh.tmp.npy").exists()
 
 
+def test_prepare_fulldata_chunked(tmp_path: Path) -> None:
+    """Single-CSV LCL-FullData.zip read in tiny chunks gives the same dedup / Null handling."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    _tariff(raw / "Tariffs.xlsx")
+    rows = [HEADER, "A,Std,2012-10-12 00:30:00.0000000,0 ,X,Affluent", "A,Std,2012-10-12 01:00:00.0000000,0.25 ,X,Affluent",
+            "A,Std,2012-10-12 01:00:00.0000000,9 ,X,Affluent", "B,ToU,2013-01-01 00:00:07.0000000,Null,Y,Comfortable",
+            "B,ToU,2013-01-01 00:30:00.0000000,0.5 ,Y,Comfortable", "A,Std,2012-10-12 00:30:00.0000000,7 ,X,Affluent"]
+    with zipfile.ZipFile(raw / "LCL-FullData.zip", "w") as z:
+        z.writestr("CC_LCL-FullData.csv", "\n".join(rows) + "\n")
+    _run("lcl_prepare.py", "--raw", str(raw), "--out", str(tmp_path / "out"), env={"LCL_CHUNK_ROWS": "2"})
+    a = np.load(tmp_path / "out" / "hh_kwh.npy")
+    t0 = pd.Timestamp("2011-11-01")
+    s = lambda ts: int((pd.Timestamp(ts) - t0) / pd.Timedelta("30min"))  # noqa: E731
+    assert a[0, s("2012-10-12 00:30")] == 0.0 and a[0, s("2012-10-12 01:00")] == 0.25
+    assert np.isnan(a[1, s("2013-01-01 00:00")]) and a[1, s("2013-01-01 00:30")] == 0.5
+    log = json.loads((tmp_path / "out" / "prepare_log.json").read_text())
+    assert log["duplicate"] == 2 and log["rows"] == 6
+
+
+def test_download_check_rejects_bad_files(tmp_path: Path) -> None:
+    sys.path.insert(0, str(REPO / "scripts"))
+    try:
+        import lcl_download as D
+    finally:
+        sys.path.pop(0)
+    html = tmp_path / "x.zip"
+    html.write_bytes(b"<!DOCTYPE html><html>error</html>")
+    assert "size" in D.check(html, {"size": 999})
+    assert D.check(html, {"size": html.stat().st_size}) == "not a zip file"
+    good = tmp_path / "g.zip"
+    with zipfile.ZipFile(good, "w") as z:
+        z.writestr("a.csv", "x\n1\n")
+    assert D.check(good, {"size": good.stat().st_size}) is None
+    assert D.check(tmp_path / "missing.zip", {"size": 1}) == "missing"
+
+
 def test_feasibility_recovers_known_effect(tmp_path: Path) -> None:
     data = tmp_path / "data"
     data.mkdir()

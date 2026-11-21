@@ -101,17 +101,16 @@ cells = [
              "!cat $RESULTS_DIR/reports/exp11_summary_main.md"),
     ("md", "## Stage 6 - Low Carbon London dToU pricing trial: data and model-free ground truth\n"
            "No GPU needed (a CPU runtime is fine; cells 1-3 and 5 are enough). Re-run cell 2 first. Downloads the "
-           "London Datastore files (CC BY 4.0, ~800 MB zip) to local disk, builds the household x half-hour matrix "
+           "London Datastore files (CC BY 4.0, ~800 MB zip; verified by scripts/lcl_download.py) to local disk, builds the household x half-hour matrix "
            "(~1 GB, copied to Drive under `pakdd27/data/lcl/processed`), then estimates the price effects with the "
            "Std group as control (`$RESULTS_DIR/lcl/feasibility`). Rough time: download 5-15 min, prepare 15-30 min, "
            "feasibility < 5 min."),
-    ("code", "LCL_ZIP = 'https://data.london.gov.uk/download/vqm0d/04feba67-f1a3-4563-98d0-f3071e3d56d1/Partitioned%20LCL%20Data.zip'\n"
-             "LCL_TAR = 'https://data.london.gov.uk/download/vqm0d/14855047-44c2-4856-8a48-e5649200e6ce/Tariffs.xlsx'\n"
-             "!mkdir -p /content/lcl/raw\n"
-             "!test -s /content/lcl/raw/Partitioned_LCL_Data.zip || wget -q --show-progress -O /content/lcl/raw/Partitioned_LCL_Data.zip \"{LCL_ZIP}\"\n"
-             "!test -s /content/lcl/raw/Tariffs.xlsx || wget -q -O /content/lcl/raw/Tariffs.xlsx \"{LCL_TAR}\"\n"
-             "# expected sizes (London Datastore metadata): zip 795722689 bytes, xlsx 245384 bytes (md5 d64694233f1e3b7241fb1db02ff063f2)\n"
-             "!ls -l /content/lcl/raw && md5sum /content/lcl/raw/Tariffs.xlsx"),
+    ("code", "# verifies size / zip structure / md5; a bad file is reported (first bytes) and replaced; falls back to\n"
+             "# LCL-FullData.zip if the partitioned zip cannot be fetched. The log is kept on Drive.\n"
+             "!mkdir -p /content/lcl /content/drive/MyDrive/pakdd27/data/lcl\n"
+             "!python scripts/lcl_download.py --raw /content/lcl/raw 2>&1 | tee /content/lcl/download.log; "
+             "cp /content/lcl/download.log /content/drive/MyDrive/pakdd27/data/lcl/\n"
+             "!ls -l /content/lcl/raw"),
     ("code", "# prints the zip layout, the first file's columns and a time-parse check before processing\n"
              "!rm -f /content/drive/MyDrive/pakdd27/data/lcl/processed/hh_kwh.tmp.npy\n"
              "!python scripts/lcl_prepare.py --raw /content/lcl/raw --out /content/lcl/processed > /content/lcl/prepare.log 2>&1; "

@@ -2,12 +2,13 @@
 
 Source (CC BY 4.0, UK Power Networks), London Datastore dataset vqm0d
 "SmartMeter Energy Consumption Data in London Households":
-  Partitioned LCL Data.zip  (168 CSVs; LCLid, stdorToU, DateTime, KWH/hh, Acorn, Acorn_grouped)
+  Partitioned LCL Data.zip  (168 CSVs; LCLid, stdorToU, DateTime, KWH/hh, Acorn, Acorn_grouped), or
+  LCL-FullData.zip          (the same rows in one ~10 GB CSV); fetched and verified by lcl_download.py
   Tariffs.xlsx              (2013 half-hourly dToU price signal: Normal / High / Low)
 The dToU group (stdorToU == "ToU") received day-ahead High / Low / Normal price signals during 2013;
 the Std group was on a flat tariff throughout and serves as the control group.
 
-No model is run here. Files are processed one at a time and the matrix is a disk memmap, so peak
+No model is run here. CSVs are read in chunks of 1M rows and the matrix is a disk memmap, so peak
 memory stays well below 1 GB. Outputs (default `data/lcl/processed/`):
   households.parquet  one row per household (row order of the matrix): id, group, acorn, acorn_grouped,
                       first / last reading, number of readings
@@ -24,6 +25,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -35,6 +37,8 @@ GRID_END = pd.Timestamp("2014-03-01 00:00")  # exclusive
 SLOT = pd.Timedelta("30min")
 MAX_HH = 6000  # dataset description: 5,567 households
 PRICE_P_PER_KWH = {"Low": 3.99, "Normal": 11.76, "High": 67.20}  # dataset description, London Datastore
+ZIP_NAMES = ("Partitioned_LCL_Data.zip", "LCL-FullData.zip")  # as saved by scripts/lcl_download.py
+CHUNK_ROWS = int(os.environ.get("LCL_CHUNK_ROWS", 1_000_000))
 
 
 def main() -> None:
@@ -69,6 +73,14 @@ def _csv_members(path: Path):
                     yield f"{n}/{m}", (lambda m=m, inner=inner: inner.open(m))
 
 
+def _chunks(files):
+    """Yield (member name, DataFrame of <= CHUNK_ROWS rows); also handles the single 10 GB CSV."""
+    for name, opener in files:
+        with opener() as f:
+            for df in pd.read_csv(io.TextIOWrapper(f, encoding="utf-8-sig"), dtype=str, chunksize=CHUNK_ROWS):
+                yield name, df
+
+
 def _group(v: str) -> str:
     s = v.strip().lower()
     if "tou" in s:  # "ToU", "dToU", "DTOU"
@@ -93,14 +105,15 @@ def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
     log = dict(rows=0, bad_time=0, off_grid=0, out_of_grid=0, duplicate=0, missing_kwh=0, group_conflict=0,
                raw_group_values={})
 
-    files = list(_csv_members(raw / "Partitioned_LCL_Data.zip"))
+    src = next((raw / n for n in ZIP_NAMES if (raw / n).exists()), None)
+    if src is None:
+        raise SystemExit(f"none of {ZIP_NAMES} in {raw}; run scripts/lcl_download.py first")
+    print(f"source: {src.name}")
+    files = list(_csv_members(src))
     if not files:
         raise SystemExit("no CSV files found in the zip (see member list above)")
-    print(f"{len(files)} csv files")
-    names = [n for n, _ in files]
-    for i, (name, opener) in enumerate(files):
-        with opener() as f:
-            df = pd.read_csv(io.TextIOWrapper(f, encoding="utf-8-sig"), dtype=str)
+    print(f"{len(files)} csv files; reading in chunks of {CHUNK_ROWS} rows")
+    for i, (name, df) in enumerate(_chunks(files)):
         if i == 0:
             print(f"first file {name}: columns {list(df.columns)}")
             print(df.head(3).to_string())
@@ -157,8 +170,9 @@ def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
         v = vals[fresh]
         v = np.where(np.isnan(v), np.float32(-1.0), v)
         mat[rows[fresh], cols[fresh]] = v
-        if (i + 1) % 10 == 0 or i + 1 == len(names):
-            print(f"  {i + 1}/{len(names)} files, {len(meta)} households, {log['rows']} rows")
+        if (i + 1) % 10 == 0:
+            print(f"  {i + 1} chunks, {len(meta)} households, {log['rows']} rows", flush=True)
+    print(f"  done: {len(meta)} households, {log['rows']} rows")
     mat.flush()
 
     n_hh = len(meta)
