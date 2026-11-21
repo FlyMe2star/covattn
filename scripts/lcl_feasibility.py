@@ -41,6 +41,7 @@ K_REF = 10
 MIN_COVERAGE = 0.90
 SPD = 48  # slots per day
 BST_2013 = (pd.Timestamp("2013-03-31 01:00"), pd.Timestamp("2013-10-27 01:00"))  # GMT instants
+PRICE = {"Low": 3.99, "Normal": 11.76, "High": 67.20}  # p/kWh, as in lcl_prepare.py
 
 
 def group_means(arr: np.ndarray, rows: np.ndarray, block: int = 400) -> np.ndarray:
@@ -93,13 +94,17 @@ def runs_of(tariff: np.ndarray) -> list[tuple[int, int, str]]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/lcl/processed")
+    ap.add_argument("--tariff-shift", type=int, default=0,
+                    help="move the tariff signal by this many slots everywhere (+1 = readings stamped at the end "
+                         "of their half hour); chosen from the alignment table")
     ap.add_argument("--tariff-bst-shift", type=int, default=0,
-                    help="move the tariff signal by this many slots during British Summer Time 2013 "
-                         "(-2 = tariff file in local clock time, readings in GMT); chosen from the alignment table")
+                    help="additional shift during British Summer Time 2013 (-2 = tariff file in local clock time, "
+                         "readings in GMT); chosen from the alignment table")
     args = ap.parse_args()
     data = Path(args.data)
-    k_bst = args.tariff_bst_shift
-    out = results_root() / "lcl" / ("feasibility" if k_bst == 0 else f"feasibility_bst{k_bst:+d}")
+    k_all, k_bst = args.tariff_shift, args.tariff_bst_shift
+    name = "feasibility" if (k_all, k_bst) == (0, 0) else f"feasibility_shift{k_all:+d}_bst{k_bst:+d}"
+    out = results_root() / "lcl" / name
     out.mkdir(parents=True, exist_ok=True)
 
     hh = pd.read_parquet(data / "households.parquet")
@@ -107,12 +112,14 @@ def main() -> None:
     tar = pd.read_parquet(data / "tariff.parquet")
     t = pd.DatetimeIndex(tar["t"])
     bst = ((t >= BST_2013[0]) & (t < BST_2013[1]))
-    if k_bst:
+    if k_all or k_bst:
+        # the load in slot i responds to the signal of slot i - k: new[i] = old[i - k]
         old = tar["tariff"].to_numpy()
-        new = old.copy()
-        idx = np.flatnonzero(bst)
-        new[idx] = old[idx - k_bst]
+        k = np.where(bst, k_all + k_bst, k_all)
+        src = np.arange(len(old)) - k
+        new = np.where((src >= 0) & (src < len(old)), old[np.clip(src, 0, len(old) - 1)], "Normal")
         tar["tariff"] = new
+        tar["price"] = tar["tariff"].map(PRICE).astype("float32")
     s2013 = int(np.searchsorted(t, pd.Timestamp("2013-01-01")))
     s2012 = int(np.searchsorted(t, pd.Timestamp("2012-01-02")))  # 2013-01-01 minus 364 days
 
@@ -200,7 +207,7 @@ def main() -> None:
         align[period] = dict(n_runs=len(rr), mean_rel_effect_by_shift=row,
                              strongest_shift=int(min(row, key=lambda k: row[k])))
     report["alignment_high_runs"] = align
-    report["tariff_bst_shift_applied"] = k_bst
+    report["tariff_shift_applied"] = dict(all=k_all, bst_extra=k_bst)
 
     # day-profile signal share (what the effect gain g will be computed on)
     ev_days = np.flatnonzero(is_event & np.isfinite(e13).all(1))

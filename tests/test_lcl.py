@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 import pandas as pd
 
 
@@ -142,7 +143,8 @@ def test_download_check_rejects_bad_files(tmp_path: Path) -> None:
     assert D.check(tmp_path / "missing.zip", {"size": 1}) == "missing"
 
 
-def test_feasibility_recovers_known_effect(tmp_path: Path) -> None:
+@pytest.mark.parametrize("lag", [0, 1])
+def test_feasibility_recovers_known_effect(tmp_path: Path, lag: int) -> None:
     data = tmp_path / "data"
     data.mkdir()
     _tariff(tmp_path / "Tariffs.xlsx")
@@ -159,6 +161,8 @@ def test_feasibility_recovers_known_effect(tmp_path: Path) -> None:
     base = 0.15 + 0.1 * np.sin(2 * np.pi * (hod - 30) / 48)
     common = 0.02 * rng.standard_normal(n)
     mult = np.where(tar["tariff"] == "High", 0.9, np.where(tar["tariff"] == "Low", 1.1, 1.0))
+    if lag:  # load responds `lag` slots after the stamped signal (readings stamped at interval end)
+        mult = np.concatenate([np.ones(lag), mult[:-lag]])
     grp = np.array(["ToU"] * 40 + ["Std"] * 80)
     x = np.empty((len(grp), n), np.float32)
     for i, g in enumerate(grp):
@@ -168,6 +172,12 @@ def test_feasibility_recovers_known_effect(tmp_path: Path) -> None:
                   "acorn_grouped": "Affluent"}).to_parquet(data / "households.parquet", index=False)
     _run("lcl_feasibility.py", "--data", str(data), env={"RESULTS_DIR": str(tmp_path / "res")})
     rep = json.loads((tmp_path / "res" / "lcl" / "feasibility" / "report.json").read_text())
+    if lag:
+        for period in ("GMT", "BST"):
+            assert rep["alignment_high_runs"][period]["strongest_shift"] == lag
+        _run("lcl_feasibility.py", "--data", str(data), "--tariff-shift", str(lag),
+             env={"RESULTS_DIR": str(tmp_path / "res")})
+        rep = json.loads((tmp_path / "res" / "lcl" / f"feasibility_shift+{lag}_bst+0" / "report.json").read_text())
     assert abs(rep["event_runs"]["High"]["rel_effect_median"] + 0.10) < 0.02
     assert abs(rep["event_runs"]["Low"]["rel_effect_median"] - 0.10) < 0.02
     for lv in ("High", "Low"):
