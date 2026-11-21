@@ -289,6 +289,47 @@ def write_summary(run: RunDir, cfg: Exp13Config) -> None:
         agg[L]["p3"] = {"spearman": rho, "p": p, "periodic": gm(per_g) if per_g else None,
                         "nonperiodic": gm(nonper_g) if nonper_g else None, "n_periodic": len(per_g)}
         agg[L]["reliance"] = {b: 1 / v for b, v in rel.items()}
+    # Sensitivity (not in the protocol; added after the run): some F-16 / WH / ParWH windows are silent (no
+    # excitation, output ~ 0), where every MAE is ~1e-9 and ratios are meaningless (ARX ratio exactly 0 there).
+    # Drop windows whose context or horizon std is < 1% of the record's std and recompute the overall ratios.
+    try:
+        meta = json.loads((INPUTS["data"] / "records.json").read_text(encoding="utf-8"))
+        zr = np.load(INPUTS["data"] / "records.npz", allow_pickle=False)
+        rstd = {m["i"]: float(np.std(zr[f"y{m['i']}"])) for m in meta}
+    except FileNotFoundError:
+        rstd = None
+    if rstd is not None:
+        lines += ["## Sensitivity (added after the run, not pre-declared): silent windows removed", "",
+                  "Windows whose context or horizon std is below 1% of the record's std are dropped.", "",
+                  "| L | method | MAE ratio [95% CI] | benchmarks < 0.99 / > 1.01 | windows dropped |", "|---|---|---|---|---|"]
+        agg["sensitivity_silent_removed"] = {}
+        for L in cfg.contexts:
+            cells = {r["bench"]: dict(np.load(run.cell_path(r["key"]), allow_pickle=False)) for r in recs if r["L"] == L}
+            if not cells:
+                continue
+            keep, logs, dropped = {}, {}, 0
+            for b, z in cells.items():
+                rs = np.asarray([rstd[int(i)] for i in z["rec"]])
+                k = (z["y_ctx_std"] >= 0.01 * rs) & (z["y_true"].std(1) >= 0.01 * rs)
+                dropped += int((~k).sum())
+                yt = z["y_true"][k].astype(np.float64)
+                mae0 = np.abs(z["med_zeroshot"][k] - yt).mean(1)
+                logs[b] = {m: np.log(np.abs(z[f"med_{m}"][k] - yt).mean(1) / mae0) for m in cand}
+                keep[b] = int(k.sum())
+            for m in cand:
+                bs = list(cells)
+                pt = float(np.exp(np.mean([np.nanmean(logs[b][m]) for b in bs])))
+                s = []
+                for _ in range(cfg.n_boot):
+                    s.append(float(np.exp(np.mean([np.nanmean(logs[b][m][rng.integers(0, keep[b], keep[b])])
+                                                   for b in bs]))))
+                per_b = [float(np.exp(np.nanmean(logs[b][m]))) for b in bs]
+                lo, hi = np.nanpercentile(s, [2.5, 97.5])
+                agg["sensitivity_silent_removed"][f"L{L}_{m}"] = {"mae": pt, "ci": [float(lo), float(hi)],
+                                                                   "per_bench": dict(zip(bs, per_b))}
+                lines.append(f"| {L} | {LABEL[m]} | {pt:.3f} [{lo:.3f}, {hi:.3f}] | {sum(v < 0.99 for v in per_b)} / "
+                             f"{sum(v > 1.01 for v in per_b)} | {dropped} |")
+        lines.append("")
     (rep / f"exp13_sysid_{cfg.run_name}.json").write_text(json.dumps(agg, indent=1, default=float), encoding="utf-8")
     out = rep / f"exp13_summary_{cfg.run_name}.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
