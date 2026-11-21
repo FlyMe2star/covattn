@@ -112,11 +112,19 @@ cells = [
              "!test -s /content/lcl/raw/Tariffs.xlsx || wget -q -O /content/lcl/raw/Tariffs.xlsx \"{LCL_TAR}\"\n"
              "# expected sizes (London Datastore metadata): zip 795722689 bytes, xlsx 245384 bytes (md5 d64694233f1e3b7241fb1db02ff063f2)\n"
              "!ls -l /content/lcl/raw && md5sum /content/lcl/raw/Tariffs.xlsx"),
-    ("code", "!python scripts/lcl_prepare.py --raw /content/lcl/raw --out /content/lcl/processed 2>&1 | tail -30\n"
-             "!mkdir -p /content/drive/MyDrive/pakdd27/data/lcl && cp -r /content/lcl/processed /content/drive/MyDrive/pakdd27/data/lcl/\n"
-             "!ls -l /content/drive/MyDrive/pakdd27/data/lcl/processed"),
-    ("code", "!python scripts/lcl_feasibility.py --data /content/lcl/processed 2>&1 | grep -v Warning\n"
-             "!ls -l $RESULTS_DIR/lcl/feasibility"),
+    ("code", "# prints the zip layout, the first file's columns and a time-parse check before processing\n"
+             "!rm -f /content/drive/MyDrive/pakdd27/data/lcl/processed/hh_kwh.tmp.npy\n"
+             "!python scripts/lcl_prepare.py --raw /content/lcl/raw --out /content/lcl/processed > /content/lcl/prepare.log 2>&1; "
+             "head -20 /content/lcl/prepare.log; echo ...; tail -40 /content/lcl/prepare.log\n"
+             "!mkdir -p /content/drive/MyDrive/pakdd27/data/lcl && cp /content/lcl/prepare.log /content/drive/MyDrive/pakdd27/data/lcl/\n"
+             "# copy the data to Drive only if preparation finished\n"
+             "!test -s /content/lcl/processed/prepare_log.json && "
+             "cp -r /content/lcl/processed /content/drive/MyDrive/pakdd27/data/lcl/ && "
+             "ls -l /content/drive/MyDrive/pakdd27/data/lcl/processed || echo 'PREPARE FAILED - nothing copied'"),
+    ("code", "!python scripts/lcl_feasibility.py --data /content/lcl/processed > /content/lcl/feasibility.log 2>&1; "
+             "tail -60 /content/lcl/feasibility.log\n"
+             "!mkdir -p $RESULTS_DIR/lcl/feasibility && cp /content/lcl/feasibility.log $RESULTS_DIR/lcl/feasibility/ && "
+             "ls -l $RESULTS_DIR/lcl/feasibility"),
 ]
 
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},

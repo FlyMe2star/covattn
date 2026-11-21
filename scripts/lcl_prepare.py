@@ -47,63 +47,123 @@ def main() -> None:
 
     n_slots = int((GRID_END - GRID_START) / SLOT)
     tmp = out / "hh_kwh.tmp.npy"
+    try:
+        _build(raw, out, tmp, n_slots)
+    finally:
+        if tmp.exists():  # never leave the 1 GB scratch matrix behind (it would be copied to Drive)
+            tmp.unlink()
+
+
+def _csv_members(path: Path):
+    """Yield (name, bytes-reader factory) for every CSV in the zip, also inside nested zips."""
+    z = zipfile.ZipFile(path)
+    members = sorted(z.namelist())
+    print(f"zip members: {len(members)}; first: {members[:3]}")
+    for n in members:
+        if n.lower().endswith(".csv"):
+            yield n, (lambda n=n: z.open(n))
+        elif n.lower().endswith(".zip"):
+            inner = zipfile.ZipFile(io.BytesIO(z.read(n)))
+            for m in sorted(inner.namelist()):
+                if m.lower().endswith(".csv"):
+                    yield f"{n}/{m}", (lambda m=m, inner=inner: inner.open(m))
+
+
+def _group(v: str) -> str:
+    s = v.strip().lower()
+    if "tou" in s:  # "ToU", "dToU", "DTOU"
+        return "ToU"
+    if s.startswith("std") or s.startswith("standard"):
+        return "Std"
+    return v.strip()
+
+
+def _parse_time(s: pd.Series) -> pd.Series:
+    s = s.str.strip()
+    sample = s.dropna().iloc[0] if s.notna().any() else ""
+    if "/" in sample:  # e.g. 12/10/2012 00:30 -> UK day-first
+        return pd.to_datetime(s, dayfirst=True, errors="coerce")
+    return pd.to_datetime(s.str.slice(0, 19), format="%Y-%m-%d %H:%M:%S", errors="coerce")
+
+
+def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
     mat = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float32, shape=(MAX_HH, n_slots))
     mat[:] = np.nan
     meta: dict[str, dict] = {}
-    log = dict(rows=0, bad_time=0, off_grid=0, out_of_grid=0, duplicate=0, missing_kwh=0, group_conflict=0)
+    log = dict(rows=0, bad_time=0, off_grid=0, out_of_grid=0, duplicate=0, missing_kwh=0, group_conflict=0,
+               raw_group_values={})
 
-    with zipfile.ZipFile(raw / "Partitioned_LCL_Data.zip") as z:
-        names = sorted(n for n in z.namelist() if n.lower().endswith(".csv"))
-        print(f"{len(names)} csv files")
-        for i, name in enumerate(names):
-            with z.open(name) as f:
-                df = pd.read_csv(io.TextIOWrapper(f, encoding="utf-8"), dtype=str)
-            df.columns = [c.strip().lower() for c in df.columns]
-            kwh_col = next(c for c in df.columns if c.startswith("kwh"))
-            t = pd.to_datetime(df["datetime"].str.slice(0, 19), errors="coerce")
-            kwh = pd.to_numeric(df[kwh_col].str.strip(), errors="coerce").to_numpy(np.float32)
-            ids = df["lclid"].str.strip().to_numpy()
-            log["rows"] += len(df)
-            ok = t.notna().to_numpy().copy()
-            log["bad_time"] += int((~ok).sum())
-            tf = t.dt.floor("30min")
-            log["off_grid"] += int((tf != t)[ok].sum())
-            col = ((tf - GRID_START) // SLOT).to_numpy(dtype=np.float64, na_value=-1)
-            ok &= (col >= 0) & (col < n_slots)
-            log["out_of_grid"] += int((t.notna().to_numpy() & ~ok).sum())
-            log["missing_kwh"] += int(np.isnan(kwh[ok]).sum())
+    files = list(_csv_members(raw / "Partitioned_LCL_Data.zip"))
+    if not files:
+        raise SystemExit("no CSV files found in the zip (see member list above)")
+    print(f"{len(files)} csv files")
+    names = [n for n, _ in files]
+    for i, (name, opener) in enumerate(files):
+        with opener() as f:
+            df = pd.read_csv(io.TextIOWrapper(f, encoding="utf-8-sig"), dtype=str)
+        if i == 0:
+            print(f"first file {name}: columns {list(df.columns)}")
+            print(df.head(3).to_string())
+        df.columns = [c.strip().lower() for c in df.columns]
+        need = {"lclid", "stdortou", "datetime"}
+        kwh_cols = [c for c in df.columns if c.startswith("kwh") or "energy" in c]
+        if not need <= set(df.columns) or len(kwh_cols) != 1:
+            raise SystemExit(f"{name}: unexpected columns {list(df.columns)} (need {sorted(need)} + one kWh column)")
+        kwh_col = kwh_cols[0]
+        for c in ("acorn", "acorn_grouped"):
+            if c not in df.columns:
+                df[c] = ""
+        for v, c in df["stdortou"].value_counts().items():
+            log["raw_group_values"][v] = log["raw_group_values"].get(v, 0) + int(c)
+        df["stdortou"] = df["stdortou"].map(_group)
+        t = _parse_time(df["datetime"])
+        if i == 0:
+            print(f"time parse check: {df['datetime'].iloc[0]!r} -> {t.iloc[0]}")
+        kwh = pd.to_numeric(df[kwh_col].str.strip(), errors="coerce").to_numpy(np.float32)
+        ids = df["lclid"].str.strip().to_numpy()
+        log["rows"] += len(df)
+        ok = t.notna().to_numpy().copy()
+        log["bad_time"] += int((~ok).sum())
+        tf = t.dt.floor("30min")
+        log["off_grid"] += int((tf != t)[ok].sum())
+        col = ((tf - GRID_START) // SLOT).to_numpy(dtype=np.float64, na_value=-1)
+        ok &= (col >= 0) & (col < n_slots)
+        log["out_of_grid"] += int((t.notna().to_numpy() & ~ok).sum())
+        log["missing_kwh"] += int(np.isnan(kwh[ok]).sum())
 
-            for hid, sub in df.loc[ok, ["lclid", "stdortou", "acorn", "acorn_grouped"]].groupby("lclid", sort=False):
-                hid = hid.strip()
-                grp = sub["stdortou"].iloc[0].strip()
-                if hid not in meta:
-                    meta[hid] = dict(row=len(meta), group=grp, acorn=sub["acorn"].iloc[0].strip(),
-                                     acorn_grouped=sub["acorn_grouped"].iloc[0].strip())
-                if sub["stdortou"].str.strip().nunique() > 1 or meta[hid]["group"] != grp:
-                    log["group_conflict"] += 1
-            assert len(meta) <= MAX_HH
-            rows = np.fromiter((meta[h.strip()]["row"] for h in ids[ok]), dtype=np.int64, count=int(ok.sum()))
-            cols = col[ok].astype(np.int64)
-            vals = kwh[ok]
-            # keep the first reading of a duplicated (household, slot), also across files
-            order = np.lexsort((np.arange(len(rows)), cols, rows))
-            rows, cols, vals = rows[order], cols[order], vals[order]
-            first = np.ones(len(rows), bool)
-            first[1:] = (rows[1:] != rows[:-1]) | (cols[1:] != cols[:-1])
-            filled = ~np.isnan(mat[rows, cols]) | ~first
-            log["duplicate"] += int(filled.sum())
-            # a slot already filled holds the earlier value; write only fresh slots
-            fresh = first.copy()
-            fresh[first] = np.isnan(mat[rows[first], cols[first]])
-            # missing kWh stays NaN but still occupies the slot as "seen"; use a sentinel then reset
-            v = vals[fresh]
-            v = np.where(np.isnan(v), np.float32(-1.0), v)
-            mat[rows[fresh], cols[fresh]] = v
-            if (i + 1) % 10 == 0 or i + 1 == len(names):
-                print(f"  {i + 1}/{len(names)} files, {len(meta)} households, {log['rows']} rows")
-        mat.flush()
+        for hid, sub in df.loc[ok, ["lclid", "stdortou", "acorn", "acorn_grouped"]].groupby("lclid", sort=False):
+            hid = hid.strip()
+            grp = sub["stdortou"].iloc[0].strip()
+            if hid not in meta:
+                meta[hid] = dict(row=len(meta), group=grp, acorn=sub["acorn"].iloc[0].strip(),
+                                 acorn_grouped=sub["acorn_grouped"].iloc[0].strip())
+            if sub["stdortou"].str.strip().nunique() > 1 or meta[hid]["group"] != grp:
+                log["group_conflict"] += 1
+        assert len(meta) <= MAX_HH
+        rows = np.fromiter((meta[h.strip()]["row"] for h in ids[ok]), dtype=np.int64, count=int(ok.sum()))
+        cols = col[ok].astype(np.int64)
+        vals = kwh[ok]
+        # keep the first reading of a duplicated (household, slot), also across files
+        order = np.lexsort((np.arange(len(rows)), cols, rows))
+        rows, cols, vals = rows[order], cols[order], vals[order]
+        first = np.ones(len(rows), bool)
+        first[1:] = (rows[1:] != rows[:-1]) | (cols[1:] != cols[:-1])
+        filled = ~np.isnan(mat[rows, cols]) | ~first
+        log["duplicate"] += int(filled.sum())
+        # a slot already filled holds the earlier value; write only fresh slots
+        fresh = first.copy()
+        fresh[first] = np.isnan(mat[rows[first], cols[first]])
+        # missing kWh stays NaN but still occupies the slot as "seen"; use a sentinel then reset
+        v = vals[fresh]
+        v = np.where(np.isnan(v), np.float32(-1.0), v)
+        mat[rows[fresh], cols[fresh]] = v
+        if (i + 1) % 10 == 0 or i + 1 == len(names):
+            print(f"  {i + 1}/{len(names)} files, {len(meta)} households, {log['rows']} rows")
+    mat.flush()
 
     n_hh = len(meta)
+    if n_hh == 0:
+        raise SystemExit("no household rows parsed")
     final = np.lib.format.open_memmap(out / "hh_kwh.npy", mode="w+", dtype=np.float32, shape=(n_hh, n_slots))
     for a in range(0, n_hh, 500):
         blk = np.array(mat[a:min(a + 500, n_hh)])

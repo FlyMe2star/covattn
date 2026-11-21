@@ -123,6 +123,9 @@ def main() -> None:
     means = {}
     for g in ("ToU", "Std"):
         rows = np.flatnonzero((hh["group"] == g).to_numpy() & (cov >= MIN_COVERAGE))
+        if len(rows) == 0:
+            raise SystemExit(f"no {g} households with >= {MIN_COVERAGE:.0%} coverage in 2013; "
+                             f"groups present: {hh['group'].value_counts().to_dict()}")
         means[g], cnt = group_means(arr, rows)
         report.setdefault("panel_active_min_2013", {})[g] = int(cnt[s2013:s2013 + 365 * SPD].min())
 

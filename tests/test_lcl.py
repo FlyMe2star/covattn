@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -55,6 +56,28 @@ def test_prepare_parsing(tmp_path: Path) -> None:
     assert np.isfinite(a).sum() == 3
     log = json.loads((tmp_path / "out" / "prepare_log.json").read_text())
     assert log["duplicate"] == 2 and log["off_grid"] == 1 and log["missing_kwh"] == 1
+
+
+def test_prepare_format_variants(tmp_path: Path) -> None:
+    """Nested zip, no Acorn columns, Standard/DTOU labels, UK day-first dates."""
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    _tariff(raw / "Tariffs.xlsx")
+    csv = "\n".join(["LCLid,stdorToU,DateTime,KWH/hh (per half hour)",
+                     "A,Standard,12/10/2012 00:30,0.1", "B,DTOU,01/02/2013 13:00,0.2"]) + "\n"
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("LCL_0.csv", csv)
+    with zipfile.ZipFile(raw / "Partitioned_LCL_Data.zip", "w") as z:
+        z.writestr("Partitioned LCL Data/part0.zip", inner.getvalue())
+    _run("lcl_prepare.py", "--raw", str(raw), "--out", str(tmp_path / "out"))
+    a = np.load(tmp_path / "out" / "hh_kwh.npy")
+    hh = pd.read_parquet(tmp_path / "out" / "households.parquet")
+    t0 = pd.Timestamp("2011-11-01")
+    s = lambda ts: int((pd.Timestamp(ts) - t0) / pd.Timedelta("30min"))  # noqa: E731
+    assert list(hh["group"]) == ["Std", "ToU"]
+    assert np.isclose(a[0, s("2012-10-12 00:30")], 0.1) and np.isclose(a[1, s("2013-02-01 13:00")], 0.2)
+    assert not (tmp_path / "out" / "hh_kwh.tmp.npy").exists()
 
 
 def test_feasibility_recovers_known_effect(tmp_path: Path) -> None:
