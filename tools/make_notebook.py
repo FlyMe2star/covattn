@@ -120,6 +120,12 @@ cells = [
              "!test -s /content/lcl/processed/prepare_log.json && "
              "cp -r /content/lcl/processed /content/drive/MyDrive/pakdd27/data/lcl/ && "
              "ls -l /content/drive/MyDrive/pakdd27/data/lcl/processed || echo 'PREPARE FAILED - nothing copied'"),
+    ("md", "## Stage 7 - Exp12: Chronos-2 what-if on the LCL pricing trial\n"
+           "GPU runtime. Needs only the model-free truth runs already on Drive (`$RESULTS_DIR/lcl/feasibility*`, "
+           "built locally from the Kaggle mirror) and the Exp3 artefacts. Resumable; `--ft` must stay (it is part of "
+           "the run's config). ~5-10 min on L4 / A100."),
+    ("code", "!python scripts/exp12_lcl_whatif.py --resume --ft 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn'\n"
+             "!grep -E 'FAILED|crashed' $RESULTS_DIR/exp12/main/log.txt | tail -5; cat $RESULTS_DIR/reports/exp12_summary_main.md"),
     ("code", "!python scripts/lcl_feasibility.py --data /content/lcl/processed > /content/lcl/feasibility.log 2>&1; "
              "tail -60 /content/lcl/feasibility.log\n"
              "!mkdir -p $RESULTS_DIR/lcl/feasibility && cp /content/lcl/feasibility.log $RESULTS_DIR/lcl/feasibility/ && "
