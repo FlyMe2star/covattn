@@ -3,6 +3,7 @@
 Open on Colab: https://colab.research.google.com/github/FlyMe2star/covattn/blob/main/colab/run_all.ipynb
 """
 import json
+import re
 from pathlib import Path
 
 REPO = "https://github.com/FlyMe2star/covattn.git"
@@ -158,13 +159,42 @@ cells = [
              "sed -n '/Descriptive/,$p' $RESULTS_DIR/reports/exp14_summary_main.md"),
 ]
 
+COLAB = "https://colab.research.google.com/github/FlyMe2star/covattn/blob/main/colab/run_all.ipynb"
+
+
+def cell_ids(cells: list[tuple[str, str]]) -> list[str]:
+    """Stable ids for direct links (COLAB#scrollTo=<id>): 'stage<N>' for a '## Stage N' heading,
+    'stage<N><x>' for a code cell whose first line is '# <N><x> ...' (e.g. 8a), else 'stage<N>-<k>'
+    ('setup-<k>' before the first stage)."""
+    ids, stage, k = [], None, 0
+    for kind, src in cells:
+        m = re.match(r"## Stage (\d+)", src) if kind == "md" else None
+        if m:
+            stage, k = m.group(1), 0
+            ids.append(f"stage{stage}")
+            continue
+        k += 1
+        m = re.match(r"# (\d+[a-z])\b", src) if kind == "code" else None
+        if m:
+            ids.append(f"stage{m.group(1)}")
+        else:
+            ids.append(f"stage{stage}-{k}" if stage else f"setup-{k}")
+    assert len(set(ids)) == len(ids), "duplicate cell ids"
+    return ids
+
+
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},
       "kernelspec": {"name": "python3", "display_name": "Python 3"}}, "nbformat": 4, "nbformat_minor": 5}
-for kind, src in cells:
-    c = {"cell_type": "markdown" if kind == "md" else "code", "metadata": {}, "source": src}
+ids = cell_ids(cells)
+for (kind, src), cid in zip(cells, ids):
+    c = {"cell_type": "markdown" if kind == "md" else "code", "id": cid, "metadata": {"id": cid}, "source": src}
     if kind == "code":
         c.update({"execution_count": None, "outputs": []})
     nb["cells"].append(c)
 out = Path(__file__).resolve().parents[1] / "colab" / "run_all.ipynb"
 out.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 print(out)
+print("direct links:")
+for (kind, src), cid in zip(cells, ids):
+    if re.fullmatch(r"stage\d+[a-z]?", cid):
+        print(f"  {cid:9s} {COLAB}#scrollTo={cid}")
