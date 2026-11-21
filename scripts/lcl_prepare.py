@@ -1,0 +1,147 @@
+"""Low Carbon London (LCL) smart-meter trial: raw zip -> household-level half-hourly matrix + tariff.
+
+Source (CC BY 4.0, UK Power Networks), London Datastore dataset vqm0d
+"SmartMeter Energy Consumption Data in London Households":
+  Partitioned LCL Data.zip  (168 CSVs; LCLid, stdorToU, DateTime, KWH/hh, Acorn, Acorn_grouped)
+  Tariffs.xlsx              (2013 half-hourly dToU price signal: Normal / High / Low)
+The dToU group (stdorToU == "ToU") received day-ahead High / Low / Normal price signals during 2013;
+the Std group was on a flat tariff throughout and serves as the control group.
+
+No model is run here. Files are processed one at a time and the matrix is a disk memmap, so peak
+memory stays well below 1 GB. Outputs (default `data/lcl/processed/`):
+  households.parquet  one row per household (row order of the matrix): id, group, acorn, acorn_grouped,
+                      first / last reading, number of readings
+  hh_kwh.npy          (n_households, n_slots) float32 kWh on a 30-min grid from GRID_START, NaN = missing
+  tariff.parquet      tariff signal and price on the same grid (Normal outside 2013, flagged by in_2013)
+  prepare_log.json    row counts and data-quality counters
+
+Usage:
+  python scripts/lcl_prepare.py --raw data/lcl/raw --out data/lcl/processed
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import zipfile
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+GRID_START = pd.Timestamp("2011-11-01 00:00")
+GRID_END = pd.Timestamp("2014-03-01 00:00")  # exclusive
+SLOT = pd.Timedelta("30min")
+MAX_HH = 6000  # dataset description: 5,567 households
+PRICE_P_PER_KWH = {"Low": 3.99, "Normal": 11.76, "High": 67.20}  # dataset description, London Datastore
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--raw", default="data/lcl/raw")
+    ap.add_argument("--out", default="data/lcl/processed")
+    args = ap.parse_args()
+    raw, out = Path(args.raw), Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    n_slots = int((GRID_END - GRID_START) / SLOT)
+    tmp = out / "hh_kwh.tmp.npy"
+    mat = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float32, shape=(MAX_HH, n_slots))
+    mat[:] = np.nan
+    meta: dict[str, dict] = {}
+    log = dict(rows=0, bad_time=0, off_grid=0, out_of_grid=0, duplicate=0, missing_kwh=0, group_conflict=0)
+
+    with zipfile.ZipFile(raw / "Partitioned_LCL_Data.zip") as z:
+        names = sorted(n for n in z.namelist() if n.lower().endswith(".csv"))
+        print(f"{len(names)} csv files")
+        for i, name in enumerate(names):
+            with z.open(name) as f:
+                df = pd.read_csv(io.TextIOWrapper(f, encoding="utf-8"), dtype=str)
+            df.columns = [c.strip().lower() for c in df.columns]
+            kwh_col = next(c for c in df.columns if c.startswith("kwh"))
+            t = pd.to_datetime(df["datetime"].str.slice(0, 19), errors="coerce")
+            kwh = pd.to_numeric(df[kwh_col].str.strip(), errors="coerce").to_numpy(np.float32)
+            ids = df["lclid"].str.strip().to_numpy()
+            log["rows"] += len(df)
+            ok = t.notna().to_numpy().copy()
+            log["bad_time"] += int((~ok).sum())
+            tf = t.dt.floor("30min")
+            log["off_grid"] += int((tf != t)[ok].sum())
+            col = ((tf - GRID_START) // SLOT).to_numpy(dtype=np.float64, na_value=-1)
+            ok &= (col >= 0) & (col < n_slots)
+            log["out_of_grid"] += int((t.notna().to_numpy() & ~ok).sum())
+            log["missing_kwh"] += int(np.isnan(kwh[ok]).sum())
+
+            for hid, sub in df.loc[ok, ["lclid", "stdortou", "acorn", "acorn_grouped"]].groupby("lclid", sort=False):
+                hid = hid.strip()
+                grp = sub["stdortou"].iloc[0].strip()
+                if hid not in meta:
+                    meta[hid] = dict(row=len(meta), group=grp, acorn=sub["acorn"].iloc[0].strip(),
+                                     acorn_grouped=sub["acorn_grouped"].iloc[0].strip())
+                if sub["stdortou"].str.strip().nunique() > 1 or meta[hid]["group"] != grp:
+                    log["group_conflict"] += 1
+            assert len(meta) <= MAX_HH
+            rows = np.fromiter((meta[h.strip()]["row"] for h in ids[ok]), dtype=np.int64, count=int(ok.sum()))
+            cols = col[ok].astype(np.int64)
+            vals = kwh[ok]
+            # keep the first reading of a duplicated (household, slot), also across files
+            order = np.lexsort((np.arange(len(rows)), cols, rows))
+            rows, cols, vals = rows[order], cols[order], vals[order]
+            first = np.ones(len(rows), bool)
+            first[1:] = (rows[1:] != rows[:-1]) | (cols[1:] != cols[:-1])
+            filled = ~np.isnan(mat[rows, cols]) | ~first
+            log["duplicate"] += int(filled.sum())
+            # a slot already filled holds the earlier value; write only fresh slots
+            fresh = first.copy()
+            fresh[first] = np.isnan(mat[rows[first], cols[first]])
+            # missing kWh stays NaN but still occupies the slot as "seen"; use a sentinel then reset
+            v = vals[fresh]
+            v = np.where(np.isnan(v), np.float32(-1.0), v)
+            mat[rows[fresh], cols[fresh]] = v
+            if (i + 1) % 10 == 0 or i + 1 == len(names):
+                print(f"  {i + 1}/{len(names)} files, {len(meta)} households, {log['rows']} rows")
+        mat.flush()
+
+    n_hh = len(meta)
+    final = np.lib.format.open_memmap(out / "hh_kwh.npy", mode="w+", dtype=np.float32, shape=(n_hh, n_slots))
+    for a in range(0, n_hh, 500):
+        blk = np.array(mat[a:min(a + 500, n_hh)])
+        blk[blk == -1.0] = np.nan  # sentinel: reading present but kWh unparseable ("Null")
+        final[a:a + 500] = blk
+    final.flush()
+    del mat, final
+    tmp.unlink()
+
+    hh = pd.DataFrame([dict(id=k, **v) for k, v in meta.items()]).sort_values("row").reset_index(drop=True)
+    arr = np.load(out / "hh_kwh.npy", mmap_mode="r")
+    first_s, last_s, n_read = [], [], []
+    for a in range(0, n_hh, 500):
+        fin = np.isfinite(np.asarray(arr[a:a + 500]))
+        any_ = fin.any(1)
+        first_s += list(np.where(any_, fin.argmax(1), -1))
+        last_s += list(np.where(any_, n_slots - 1 - fin[:, ::-1].argmax(1), -1))
+        n_read += list(fin.sum(1))
+    hh["first"] = [GRID_START + s * SLOT if s >= 0 else pd.NaT for s in first_s]
+    hh["last"] = [GRID_START + s * SLOT if s >= 0 else pd.NaT for s in last_s]
+    hh["n_readings"] = n_read
+    hh.to_parquet(out / "households.parquet", index=False)
+
+    tar = pd.read_excel(raw / "Tariffs.xlsx", sheet_name="Sheet1")
+    tar.columns = ["t", "tariff"]
+    tar["t"] = pd.to_datetime(tar["t"])
+    grid = pd.DataFrame({"t": pd.date_range(GRID_START, GRID_END - SLOT, freq="30min")})
+    g = grid.merge(tar, on="t", how="left")
+    g["in_2013"] = g["tariff"].notna()
+    g["tariff"] = g["tariff"].fillna("Normal")
+    g["price"] = g["tariff"].map(PRICE_P_PER_KWH).astype("float32")
+    g.to_parquet(out / "tariff.parquet", index=False)
+
+    log.update(n_households=n_hh, groups=hh["group"].value_counts().to_dict(), n_slots=n_slots,
+               grid_start=str(GRID_START), tariff_2013=g.loc[g["in_2013"], "tariff"].value_counts().to_dict())
+    (out / "prepare_log.json").write_text(json.dumps(log, indent=2, default=str), encoding="utf-8")
+    print(json.dumps(log, indent=2, default=str))
+
+
+if __name__ == "__main__":
+    main()

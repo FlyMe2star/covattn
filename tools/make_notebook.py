@@ -99,6 +99,24 @@ cells = [
              "!grep -E 'FAILED|crashed|skipped' $RESULTS_DIR/exp10/main/log.txt | tail -8; head -60 $RESULTS_DIR/reports/exp10_summary_main.md"),
     ("code", "!python scripts/exp11_cost.py --exp3-run v2 2>&1 | grep -E 'exp11:|Error|Traceback'\n"
              "!cat $RESULTS_DIR/reports/exp11_summary_main.md"),
+    ("md", "## Stage 6 - Low Carbon London dToU pricing trial: data and model-free ground truth\n"
+           "No GPU needed (a CPU runtime is fine; cells 1-3 and 5 are enough). Re-run cell 2 first. Downloads the "
+           "London Datastore files (CC BY 4.0, ~800 MB zip) to local disk, builds the household x half-hour matrix "
+           "(~1 GB, copied to Drive under `pakdd27/data/lcl/processed`), then estimates the price effects with the "
+           "Std group as control (`$RESULTS_DIR/lcl/feasibility`). Rough time: download 5-15 min, prepare 15-30 min, "
+           "feasibility < 5 min."),
+    ("code", "LCL_ZIP = 'https://data.london.gov.uk/download/vqm0d/04feba67-f1a3-4563-98d0-f3071e3d56d1/Partitioned%20LCL%20Data.zip'\n"
+             "LCL_TAR = 'https://data.london.gov.uk/download/vqm0d/14855047-44c2-4856-8a48-e5649200e6ce/Tariffs.xlsx'\n"
+             "!mkdir -p /content/lcl/raw\n"
+             "!test -s /content/lcl/raw/Partitioned_LCL_Data.zip || wget -q --show-progress -O /content/lcl/raw/Partitioned_LCL_Data.zip \"{LCL_ZIP}\"\n"
+             "!test -s /content/lcl/raw/Tariffs.xlsx || wget -q -O /content/lcl/raw/Tariffs.xlsx \"{LCL_TAR}\"\n"
+             "# expected sizes (London Datastore metadata): zip 795722689 bytes, xlsx 245384 bytes (md5 d64694233f1e3b7241fb1db02ff063f2)\n"
+             "!ls -l /content/lcl/raw && md5sum /content/lcl/raw/Tariffs.xlsx"),
+    ("code", "!python scripts/lcl_prepare.py --raw /content/lcl/raw --out /content/lcl/processed 2>&1 | tail -30\n"
+             "!mkdir -p /content/drive/MyDrive/pakdd27/data/lcl && cp -r /content/lcl/processed /content/drive/MyDrive/pakdd27/data/lcl/\n"
+             "!ls -l /content/drive/MyDrive/pakdd27/data/lcl/processed"),
+    ("code", "!python scripts/lcl_feasibility.py --data /content/lcl/processed 2>&1 | grep -v Warning\n"
+             "!ls -l $RESULTS_DIR/lcl/feasibility"),
 ]
 
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},
