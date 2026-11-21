@@ -23,9 +23,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import io
 import json
 import os
+import sys
+import traceback
 import zipfile
 from pathlib import Path
 
@@ -52,11 +55,17 @@ def main() -> None:
 
     n_slots = int((GRID_END - GRID_START) / SLOT)
     tmp = out / "hh_kwh.tmp.npy"
+    err = None
     try:
         _build(raw, out, tmp, n_slots)
-    finally:
-        if tmp.exists():  # never leave the 1 GB scratch matrix behind (it would be copied to Drive)
-            tmp.unlink()
+    except BaseException:  # noqa: BLE001 - keep only the text, so the traceback releases the memmap
+        err = traceback.format_exc()
+    gc.collect()  # on Windows an open memmap cannot be deleted
+    if tmp.exists():  # never leave the 1 GB scratch matrix behind (it would be copied to Drive)
+        tmp.unlink()
+    if err is not None:
+        print(err, file=sys.stderr)
+        sys.exit(1)
 
 
 def _csv_members(path: Path):
@@ -106,7 +115,10 @@ def _build(raw: Path, out: Path, tmp: Path, n_slots: int) -> None:
     log = dict(rows=0, bad_time=0, off_grid=0, out_of_grid=0, duplicate=0, missing_kwh=0, group_conflict=0,
                raw_group_values={})
 
-    src = next((raw / n for n in ZIP_NAMES if (raw / n).exists()), None)
+    for n in ZIP_NAMES:
+        if (raw / n).exists() and not zipfile.is_zipfile(raw / n):
+            print(f"ignoring {n}: not a valid zip ({(raw / n).stat().st_size} bytes)")
+    src = next((raw / n for n in ZIP_NAMES if (raw / n).exists() and zipfile.is_zipfile(raw / n)), None)
     info = None
     if src is not None:
         print(f"source: London Datastore {src.name}")
