@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 
 REPO = "https://github.com/FlyMe2star/covattn.git"
+E14_ARGS = (" --sysid-data /content/drive/MyDrive/pakdd27/data/sysid/processed"
+            " --daisy-data /content/drive/MyDrive/pakdd27/data/daisy/processed")
+E14_GREP = " 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn|it/s]|symlinks'"
 
 cells = [
     ("md", "# covattn - run experiments on Colab\n"
@@ -120,16 +123,39 @@ cells = [
              "!test -s /content/lcl/processed/prepare_log.json && "
              "cp -r /content/lcl/processed /content/drive/MyDrive/pakdd27/data/lcl/ && "
              "ls -l /content/drive/MyDrive/pakdd27/data/lcl/processed || echo 'PREPARE FAILED - nothing copied'"),
+    ("code", "!python scripts/lcl_feasibility.py --data /content/lcl/processed > /content/lcl/feasibility.log 2>&1; "
+             "tail -60 /content/lcl/feasibility.log\n"
+             "!mkdir -p $RESULTS_DIR/lcl/feasibility && cp /content/lcl/feasibility.log $RESULTS_DIR/lcl/feasibility/ && "
+             "ls -l $RESULTS_DIR/lcl/feasibility"),
     ("md", "## Stage 7 - Exp12: Chronos-2 what-if on the LCL pricing trial\n"
            "GPU runtime. Needs only the model-free truth runs already on Drive (`$RESULTS_DIR/lcl/feasibility*`, "
            "built locally from the Kaggle mirror) and the Exp3 artefacts. Resumable; `--ft` must stay (it is part of "
            "the run's config). ~5-10 min on L4 / A100."),
     ("code", "!python scripts/exp12_lcl_whatif.py --resume --ft 2>&1 | grep -v -E 'Loading weights|httpx|UserWarning|warnings.warn'\n"
              "!grep -E 'FAILED|crashed' $RESULTS_DIR/exp12/main/log.txt | tail -5; cat $RESULTS_DIR/reports/exp12_summary_main.md"),
-    ("code", "!python scripts/lcl_feasibility.py --data /content/lcl/processed > /content/lcl/feasibility.log 2>&1; "
-             "tail -60 /content/lcl/feasibility.log\n"
-             "!mkdir -p $RESULTS_DIR/lcl/feasibility && cp /content/lcl/feasibility.log $RESULTS_DIR/lcl/feasibility/ && "
-             "ls -l $RESULTS_DIR/lcl/feasibility"),
+    ("md", "## Stage 8 - Exp14: training-free gate (protocol docs/gate_protocol.md)\n"
+           "GPU runtime (A100 or L4). Run Stage 7 first: the LCL check reads all four Exp12 cells. Inputs on Drive: "
+           "`pakdd27/data/sysid/processed` (Exp13 rigs) and `pakdd27/data/daisy/processed` (DaISy, prepared by "
+           "scripts/daisy_prepare.py), Exp3/6/12/13 runs. Order matters: select (thresholds are frozen in "
+           "`exp14/main/gate_select.json`) -> confirm on DaISy -> descriptive checks. Every cell is resumable. "
+           "Rough time on A100: quick 3-5 min, select 20-40 min (EPF download + 160 semi cells), confirm ~5 min, "
+           "describe 40-70 min (fev data download dominates)."),
+    ("code", "# 8a quick check of the whole pipeline (separate run 'quick'; its thresholds are not used anywhere)\n"
+             f"!python scripts/exp14_gate.py --quick --resume --part select confirm describe{E14_ARGS}{E14_GREP}\n"
+             "!grep -E 'FAILED|crashed|Traceback' $RESULTS_DIR/exp14/quick/log.txt | tail -5; "
+             "head -30 $RESULTS_DIR/reports/exp14_summary_quick.md"),
+    ("code", "# 8b selection on simulated / semi-synthetic data -> thresholds frozen\n"
+             f"!python scripts/exp14_gate.py --resume --part select{E14_ARGS}{E14_GREP}\n"
+             "!grep -E 'FAILED|crashed|Traceback|incomplete' $RESULTS_DIR/exp14/main/log.txt | tail -5; "
+             "head -20 $RESULTS_DIR/reports/exp14_summary_main.md"),
+    ("code", "# 8c confirmation on DaISy (pre-declared C1-C3)\n"
+             f"!python scripts/exp14_gate.py --resume --part confirm{E14_ARGS}{E14_GREP}\n"
+             "!grep -E 'FAILED|crashed|Traceback' $RESULTS_DIR/exp14/main/log.txt | tail -5; "
+             "sed -n '/Confirmation/,/Descriptive/p' $RESULTS_DIR/reports/exp14_summary_main.md"),
+    ("code", "# 8d descriptive checks on data seen before the protocol (Exp13, Exp3 test, LCL, fev-bench)\n"
+             f"!python scripts/exp14_gate.py --resume --part describe{E14_ARGS}{E14_GREP}\n"
+             "!grep -E 'FAILED|crashed|Traceback' $RESULTS_DIR/exp14/main/log.txt | tail -5; "
+             "sed -n '/Descriptive/,$p' $RESULTS_DIR/reports/exp14_summary_main.md"),
 ]
 
 nb = {"cells": [], "metadata": {"accelerator": "GPU", "colab": {"gpuType": "A100", "provenance": []},

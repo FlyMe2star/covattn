@@ -64,3 +64,21 @@ everywhere.
 
 If C3 fails, the real-world accuracy claim of Exp13 does not replicate and the real-world line of work is
 stopped. If C3 holds and C1 or C2 fails, the gate is not claimed; ungated results are reported as they are.
+
+## Implementation notes (added 2026-11-21 with the code, before any Exp14 model run)
+
+Details the text above leaves open, fixed in `src/covattn/gate.py` and `scripts/exp14_gate.py`. The code was
+checked only with unit tests and a dry run with a stand-in linear "model"; Chronos-2 has not been run on DaISy.
+- One gate decision per window, from the factual context and future input; a what-if pair uses it for both runs.
+- Gate statistics only (model inputs unchanged): leading positions are dropped until the target and all covariates
+  are finite (fev left padding), remaining NaNs are filled by linear interpolation (LCL gaps).
+- A context too short for every `fit_arx` order, or an unfittable one, gives s = 0 (gate off). rho is undefined
+  (gate off unless tau_rho = inf) when the probe or the ARX response is zero (constant input in the context).
+- Selection (b): the objective_np sums are pooled over all (window, step / pulse) pairs of all semi cells, so that
+  cells with different L can be combined; (a) is the mean over the Exp3 val batches, as in Exp3.
+- Descriptive parts rerun zero-shot only (for the probe difference); the repaired and zero-shot forecasts they
+  score are the stored ones of Exp3 / 6 / 12 / 13, and every regenerated window is checked against the stored
+  y_true before use.
+- DaISy heating_system: the description gives no column order; the file has 3 columns and column 1 is equally
+  spaced with step 2.0 (= the stated sampling interval), so it is time, then u, then y
+  (`scripts/daisy_prepare.py`). CD_player_arm (N = 2048) has no L = 2048 cell (needs N >= 2112).
