@@ -27,7 +27,7 @@ The feasibility report without any shift (`results/lcl/feasibility/report.json`)
 above did not anticipate: the strongest High-run effect is at shift +1 in GMT months and at -1 in BST months
 (the same holds for Low runs: +1 and -1). The two-slot difference between the seasons is the local-time /
 GMT offset foreseen above; the common +1 is consistent with readings being stamped at the end of their half
-hour (the first readings of the data are stamped 00:30). Decision (by the author, as the rule required):
+hour (not confirmed by the data documentation; it is an inference from the alignment table). Decision (by the author, as the rule required):
 primary analysis with the tariff moved by +1 slot everywhere and by a further -2 slots during BST
 (`--tariff-shift 1 --tariff-bst-shift -2`, i.e. +1 in GMT months, -1 in BST months); the unshifted analysis
 is reported as a sensitivity analysis. The same alignment is used for the covariate given to the models.
