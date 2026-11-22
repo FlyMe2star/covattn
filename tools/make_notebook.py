@@ -18,7 +18,7 @@ cells = [
            "Scripts run as subprocesses (`!python ...`), so pinned packages take effect without restarting the runtime."),
     ("code", "# 1. mount Drive (results live here)\nfrom google.colab import drive\ndrive.mount('/content/drive')"),
     ("code", "# 2. get / update the code from GitHub\n"
-             f"REPO = '{REPO}'\nBRANCH = 'main'\n"
+             f"REPO = '{REPO}'\nBRANCH = 'explore/r1-controls'\n"
              "import os\n"
              "if not os.path.isdir('/content/covattn/.git'):\n"
              "    !git clone -q -b {BRANCH} {REPO} /content/covattn\n"
@@ -157,9 +157,16 @@ cells = [
              f"!python scripts/exp14_gate.py --resume --part describe{E14_ARGS}{E14_GREP}\n"
              "!grep -E 'FAILED|crashed|Traceback' $RESULTS_DIR/exp14/main/log.txt | tail -5; "
              "sed -n '/Descriptive/,$p' $RESULTS_DIR/reports/exp14_summary_main.md"),
+    ("md", "## Stage 9 - R1 layer-matched head sets and position controls\n"
+           "Requires only the completed exp3/v2 selection on Drive. Quick and full use separate run directories. "
+           "Run the quick check, then the full evaluation. Re-run the same cell to resume."),
+    ("code", "# 9a quick check with two matched sets and both position controls\n"
+             "import subprocess\nsubprocess.run(['python', 'scripts/exp15_r1_controls.py', '--quick', '--resume'], check=True)"),
+    ("code", "# 9b full evaluation, 39 fixed matched sets and both position controls\n"
+             "import subprocess\nsubprocess.run(['python', 'scripts/exp15_r1_controls.py', '--resume'], check=True)"),
 ]
 
-COLAB = "https://colab.research.google.com/github/FlyMe2star/covattn/blob/main/colab/run_all.ipynb"
+COLAB = "https://colab.research.google.com/github/FlyMe2star/covattn/blob/explore/r1-controls/colab/run_all.ipynb"
 
 
 def cell_ids(cells: list[tuple[str, str]]) -> list[str]:
