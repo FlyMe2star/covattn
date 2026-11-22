@@ -1,4 +1,4 @@
-"""Figures 1-7 (PDF + PNG, LNCS text width 12.2 cm) from the saved result files only.
+"""Paper figures (PDF + PNG, LNCS text width 12.2 cm) from the saved result files only.
 
   fig1_gain_by_family : Exp1 - effect gain g by system family and context length (box plots), ARX as reference;
                         non-periodic inputs and multisine in separate panels (two regimes)
@@ -11,6 +11,7 @@
   fig6_other_models   : Exp8 - g of Chronos-2, TimesFM 3.0, TimesFM 2.5 + XReg and ARX by input type and family
   fig7_real_world     : Exp6 - fev-bench per-task WQL ratios with the geometric mean [95% CI] of Table 5, and the
                         semi-synthetic g per method
+  fig8_matched_heads  : Exp15 - gain error for layer-matched head sets, pooled and by system
 
 Style rules (LNCS): width 4.8 in = text width, every text element >= 6 pt, vector PDF with embedded TrueType
 fonts, colour-blind-safe categorical colours plus marker shape where colour alone would carry meaning.
@@ -30,6 +31,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
 from covattn import metrics as M  # noqa: E402
 from covattn.io_utils import results_root, setup_logging  # noqa: E402
@@ -562,6 +564,25 @@ def fig7(exp6: Path, rep: Path, out: Path, run: str) -> None:
     save(fig, out, "fig7_real_world")
 
 
+def fig8(run: Path, out: Path) -> None:
+    pooled = pd.read_csv(run / "all.csv", index_col="method").gain_error
+    random = pooled.filter(like="matched_").sort_values()
+    systems = pd.read_csv(run / "system.csv").pivot(index="system", columns="method", values="gain_error")
+    fig, (left, right) = plt.subplots(1, 2, figsize=(LNCS_W, 1.85))
+    left.plot(range(1, len(random) + 1), random, "o", ms=2.6, color=C["ink2"], label="Random sets")
+    left.axhline(pooled["r1"], ls="--", color=METHOD_COLOR["r1"], label="Selected heads (R1)")
+    left.set(xlabel="Random sets, sorted by error", ylabel="Median $|1-g|$", title="(a) All test pairs")
+    left.legend(loc="upper left")
+    typical = systems.filter(like="matched_").median(axis=1)
+    right.scatter(typical, systems.r1, s=14, color=METHOD_COLOR["r1"])
+    upper = 1.05 * max(typical.max(), systems.r1.max())
+    right.plot([0, upper], [0, upper], "--", color=C["ref"], lw=0.8)
+    right.set(xlim=(0, upper), ylim=(0, upper), aspect="equal", xlabel="Median random-set error",
+              ylabel="R1 error", title="(b) Individual systems")
+    fig.tight_layout()
+    save(fig, out, "fig8_matched_heads")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exp1-run", default="main")
@@ -570,14 +591,14 @@ def main() -> None:
     p.add_argument("--exp5-run", default="main")
     p.add_argument("--exp6-run", default="main")
     p.add_argument("--exp8-run", default="main")
-    p.add_argument("--only", nargs="+", default=None, choices=["0", "1", "2", "3", "4", "5", "6", "7"])
+    p.add_argument("--only", nargs="+", default=None, choices=list("012345678"))
     a = p.parse_args()
     setup_logging()
     logging.getLogger("fontTools").setLevel(logging.WARNING)
     style()
     root = results_root()
     out = root / "reports" / "figs"
-    only = set(a.only or "01234567")
+    only = set(a.only or "012345678")
     e3 = root / "exp3" / a.exp3_run
     jobs = [("0", lambda: fig0(out)),
             ("1", lambda: fig1(root / "exp1" / a.exp1_run, out)),
@@ -586,7 +607,8 @@ def main() -> None:
             ("4", lambda: fig4(root / "exp2" / a.exp2_run, out)),
             ("5", lambda: fig5(e3, root / "exp5" / a.exp5_run, out)),
             ("6", lambda: fig6(root / "exp8" / a.exp8_run, e3, out)),
-            ("7", lambda: fig7(root / "exp6" / a.exp6_run, root / "reports", out, a.exp6_run))]
+            ("7", lambda: fig7(root / "exp6" / a.exp6_run, root / "reports", out, a.exp6_run)),
+            ("8", lambda: fig8(root / "exp15" / "explore-r1-controls", out))]
     for k, fn in jobs:
         if k in only:
             try:

@@ -26,6 +26,7 @@ all lettering >= 6 pt). This file lists definitions and conventions, not results
 | fig5_ablations | (a) R1 selection grid on the validation split (objective; lower = better), circle = chosen (k=20, gamma=2.5); (b) Exp5 head-set ablation on test, L=512 | random head sets use fixed seeds; all three draws shown |
 | fig6_other_models | Exp8: same test samples as Exp3 (seed 0, delta = 1, step and pulse pooled) | marker = median g, bar = IQR; ARX read from the Exp3 cells of the same samples. TimesFM 2.5 + XReg is memoryless by construction (pulse: corr(e_hat, du) = 1.000; step: e_hat constant in all pairs) |
 | fig7_real_world | Exp6. (a) fev-bench: 28 single-target tasks with known dynamic covariates (pre-declared pool, all reported), first 100 series per task, official horizons / windows; dots = per-task test WQL ratio vs zero-shot with covariates; diamond + bar = geometric mean with 95% task-bootstrap CI (2000 resamples), identical to Table 5. (b) semi-synthetic what-if on real EPF backgrounds, g per method | (a) x axis is log scale; R1-val / R2-val choose between zero-shot and the repair on 3 validation windows that precede the test windows |
+| fig8_matched_heads | Exp15, R1 and 39 random sets with identical head counts per layer and the same gain | Left shows each set's median absolute gain error on the pooled test pairs. Right compares R1 with the median random set within each system. |
 
 ## Tables
 
@@ -40,3 +41,4 @@ all lettering >= 6 pt). This file lists definitions and conventions, not results
 | table6_semisynth | Exp6 semi-synthetic, pooled over backgrounds, systems, kappa and L | ARX has no err. ratio (Exp6 does not evaluate ARX's factual forecast, only its what-if effect) |
 | table7_seeds | Exp7, mean +- sd over 3 test-sample seeds (R2: per training seed, and pooled over 3 x 3); 95% CI = cluster bootstrap over cells of sample seed 0 | full FT / LoRA were not re-run (one seed) |
 | table8_other_models | Exp8, median g per subset; dagger = XReg is memoryless by construction (see fig6 note) | ARX is a reference column |
+| table11_output_scale | Exp15, validation-fitted output scaling on the Exp3 simulated test pairs | Median absolute gain error and NRMSE pooled over inputs, followed by NRMSE for each input. Bold marks the lowest error per row. |

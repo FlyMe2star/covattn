@@ -1,4 +1,4 @@
-"""Tables 1-8 (LaTeX, booktabs) from the saved result files only.
+"""Paper tables (LaTeX, booktabs) from the saved result files only.
 
 Re-runs each experiment's `--summary-only` (no model is loaded; the numbers are recomputed from
 metrics.jsonl / cell files) and copies the produced tables to canonical names with a source line:
@@ -11,6 +11,7 @@ metrics.jsonl / cell files) and copies the produced tables to canonical names wi
   reports/tables/table6_semisynth.tex   <- Exp6 run          (semi-synthetic EPF; optional)
   reports/tables/table7_seeds.tex       <- Exp7 run          (seed robustness; optional)
   reports/tables/table8_other_models.tex <- Exp8 run         (other TSFMs; optional)
+  reports/tables/table11_output_scale.tex <- Exp15 scores    (global output calibration; optional)
 
   python scripts/make_tables.py --exp3-run v2 --exp4-run v2lora --exp5-run main
   (Exp6/7/8 use --exp6-run / --exp7-run / --exp8-run, default main)
@@ -23,6 +24,8 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
+
+import pandas as pd
 
 from covattn.io_utils import results_root, setup_logging
 
@@ -48,6 +51,23 @@ def copy(src: Path, dst: Path, source_note: str) -> None:
     log.info("wrote %s", dst)
 
 
+def output_scale_table(scores: Path, dst: Path) -> None:
+    data = pd.read_csv(scores, index_col=["group", "subset"])
+    rows = [r"\begin{tabular}{lccc}", r"\toprule",
+            r"Simulated test pairs & Zero-shot & Output scaling & R1 \\", r"\midrule"]
+    for subset, metric, label in [
+        ("0", "gain_error", r"All, median $|1-g|$"),
+        ("0", "nrmse", "All, median NRMSE"),
+        ("prbs", "nrmse", r"\quad PRBS"), ("ar1", "nrmse", r"\quad AR(1)"),
+        ("steps", "nrmse", r"\quad Random steps"), ("multisine", "nrmse", r"\quad Multisine"),
+    ]:
+        row = data.loc[("all" if subset == "0" else "input", subset)]
+        values = [row[f"{method}_{metric}"] for method in ("zero", "scaled", "r1")]
+        cells = [rf"\textbf{{{v:.3f}}}" if v == min(values) else f"{v:.3f}" for v in values]
+        rows.append(" & ".join([label, *cells]) + r" \\")
+    dst.write_text("\n".join([*rows, r"\bottomrule", r"\end{tabular}", ""]), encoding="utf-8")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exp3-run", default="v2")
@@ -62,6 +82,9 @@ def main() -> None:
     root = results_root()
     t = root / "reports" / "tables"
     t.mkdir(parents=True, exist_ok=True)
+    scores = root / "exp15" / "explore-output-scale" / "scores.csv"
+    if scores.exists():
+        output_scale_table(scores, t / "table11_output_scale.tex")
     if summary("exp3_repair.py", "--run-name", a.exp3_run):
         copy(t / f"table1_synthetic_{a.exp3_run}.tex", t / "table1_synthetic.tex", f"exp3/{a.exp3_run}")
         copy(t / f"table1r_synthetic_with_r_{a.exp3_run}.tex", t / "table1r_synthetic_with_r.tex", f"exp3/{a.exp3_run}")
